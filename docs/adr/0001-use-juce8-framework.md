@@ -6,7 +6,7 @@
 
 ## Context and Problem Statement
 
-Tight Boost needs a cross-platform audio plugin framework that can target AU and VST3 on macOS and VST3 on Windows, ship a Standalone build, and support a modern C++ toolchain. Which framework should the project build on?
+Overture needs a cross-platform audio plugin framework that can target AU and VST3 on macOS and VST3 on Windows, ship a Standalone build, and support a modern C++ toolchain. Which framework should the project build on?
 
 ## Decision Drivers
 

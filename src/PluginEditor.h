@@ -2,16 +2,16 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-class TightBoostAudioProcessor;
+class OvertureAudioProcessor;
 
 // A simple, functional v0.1 editor: one rotary slider per parameter, bound
 // to the APVTS via SliderAttachment. A custom vector-drawn GUI is a later
 // milestone; this is deliberately plain but fully wired and usable.
-class TightBoostAudioProcessorEditor final : public juce::AudioProcessorEditor
+class OvertureAudioProcessorEditor final : public juce::AudioProcessorEditor
 {
 public:
-    explicit TightBoostAudioProcessorEditor (TightBoostAudioProcessor& processorToEdit);
-    ~TightBoostAudioProcessorEditor() override;
+    explicit OvertureAudioProcessorEditor (OvertureAudioProcessor& processorToEdit);
+    ~OvertureAudioProcessorEditor() override;
 
     void resized() override;
 
@@ -28,7 +28,7 @@ private:
 
     void configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText);
 
-    TightBoostAudioProcessor& audioProcessor;
+    OvertureAudioProcessor& audioProcessor;
 
     Knob tightKnob;
     Knob driveKnob;
@@ -36,5 +36,5 @@ private:
     Knob levelKnob;
     Knob mixKnob;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TightBoostAudioProcessorEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvertureAudioProcessorEditor)
 };

@@ -7,7 +7,7 @@
 
 ## Context and Problem Statement
 
-The intent for Tight Boost is to be copyleft open source software — modifications and derivatives should stay open, in the spirit of the GPL family. JUCE 8 was chosen as the plugin framework (ADR 0001), and JUCE's own licensing constrains what license this project can practically use in its open-source configuration. What license should the project ship under?
+The intent for Overture is to be copyleft open source software — modifications and derivatives should stay open, in the spirit of the GPL family. JUCE 8 was chosen as the plugin framework (ADR 0001), and JUCE's own licensing constrains what license this project can practically use in its open-source configuration. What license should the project ship under?
 
 ## Decision Drivers
 

@@ -1,4 +1,4 @@
-# Contributing to Tight Boost
+# Contributing to Overture
 
 Thanks for your interest in contributing. This document covers the workflow, testing requirements, and code style expected for changes to this project.
 
@@ -34,7 +34,7 @@ test(dsp): add null test for unity-gain bypass
 
 ## DSP test requirements
 
-Tight Boost is real-time audio software — DSP correctness bugs are expensive to catch late, so tests are not optional for DSP code.
+Overture is real-time audio software — DSP correctness bugs are expensive to catch late, so tests are not optional for DSP code.
 
 **New DSP code without tests does not merge.** At minimum, new or changed DSP components need:
 

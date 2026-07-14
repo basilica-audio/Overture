@@ -3,7 +3,7 @@
 #include <cmath>
 
 // A single-ended, asymmetric tanh soft clipper - the nonlinearity at the
-// heart of Tight Boost's "808 boost" voicing. Pure, allocation-free, and
+// heart of Overture's "808 boost" voicing. Pure, allocation-free, and
 // stateless, so it is unit-testable in complete isolation from the rest of
 // the signal chain (see tests/AsymSoftClipperTests.cpp) and safe to call
 // per-sample from the audio thread.

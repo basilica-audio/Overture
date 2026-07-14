@@ -4,7 +4,7 @@
 #include "params/ParameterLayout.h"
 
 //==============================================================================
-TightBoostAudioProcessor::TightBoostAudioProcessor()
+OvertureAudioProcessor::OvertureAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
@@ -23,65 +23,65 @@ TightBoostAudioProcessor::TightBoostAudioProcessor()
     jassert (mixPercent != nullptr);
 }
 
-TightBoostAudioProcessor::~TightBoostAudioProcessor() = default;
+OvertureAudioProcessor::~OvertureAudioProcessor() = default;
 
 //==============================================================================
-juce::AudioProcessorValueTreeState::ParameterLayout TightBoostAudioProcessor::createParameterLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout OvertureAudioProcessor::createParameterLayout()
 {
     return tbst::createParameterLayout();
 }
 
 //==============================================================================
-const juce::String TightBoostAudioProcessor::getName() const
+const juce::String OvertureAudioProcessor::getName() const
 {
     return JucePlugin_Name;
 }
 
-bool TightBoostAudioProcessor::acceptsMidi() const
+bool OvertureAudioProcessor::acceptsMidi() const
 {
     return false;
 }
 
-bool TightBoostAudioProcessor::producesMidi() const
+bool OvertureAudioProcessor::producesMidi() const
 {
     return false;
 }
 
-bool TightBoostAudioProcessor::isMidiEffect() const
+bool OvertureAudioProcessor::isMidiEffect() const
 {
     return false;
 }
 
-double TightBoostAudioProcessor::getTailLengthSeconds() const
+double OvertureAudioProcessor::getTailLengthSeconds() const
 {
     return 0.0;
 }
 
-int TightBoostAudioProcessor::getNumPrograms()
+int OvertureAudioProcessor::getNumPrograms()
 {
     return 1;
 }
 
-int TightBoostAudioProcessor::getCurrentProgram()
+int OvertureAudioProcessor::getCurrentProgram()
 {
     return 0;
 }
 
-void TightBoostAudioProcessor::setCurrentProgram (int)
+void OvertureAudioProcessor::setCurrentProgram (int)
 {
 }
 
-const juce::String TightBoostAudioProcessor::getProgramName (int)
+const juce::String OvertureAudioProcessor::getProgramName (int)
 {
     return {};
 }
 
-void TightBoostAudioProcessor::changeProgramName (int, const juce::String&)
+void OvertureAudioProcessor::changeProgramName (int, const juce::String&)
 {
 }
 
 //==============================================================================
-void TightBoostAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void OvertureAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate;
@@ -102,20 +102,20 @@ void TightBoostAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
 
     // Oversampling (4x, applied around the clipper) is the only source of
     // reported latency; the dry path is compensated against it internally
-    // by TightBoostEngine's DryWetMixer (see docs/architecture.md).
+    // by OvertureEngine's DryWetMixer (see docs/architecture.md).
     setLatencySamples (engine.getLatencySamples());
 }
 
-void TightBoostAudioProcessor::releaseResources()
+void OvertureAudioProcessor::releaseResources()
 {
 }
 
-void TightBoostAudioProcessor::reset()
+void OvertureAudioProcessor::reset()
 {
     engine.reset();
 }
 
-bool TightBoostAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool OvertureAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto mono = juce::AudioChannelSet::mono();
     const auto stereo = juce::AudioChannelSet::stereo();
@@ -132,7 +132,7 @@ bool TightBoostAudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
     return true;
 }
 
-void TightBoostAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void OvertureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -155,25 +155,25 @@ void TightBoostAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 }
 
 //==============================================================================
-bool TightBoostAudioProcessor::hasEditor() const
+bool OvertureAudioProcessor::hasEditor() const
 {
     return true;
 }
 
-juce::AudioProcessorEditor* TightBoostAudioProcessor::createEditor()
+juce::AudioProcessorEditor* OvertureAudioProcessor::createEditor()
 {
-    return new TightBoostAudioProcessorEditor (*this);
+    return new OvertureAudioProcessorEditor (*this);
 }
 
 //==============================================================================
-void TightBoostAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+void OvertureAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     const auto state = apvts.copyState();
     const std::unique_ptr<juce::XmlElement> xml (state.createXml());
     copyXmlToBinary (*xml, destData);
 }
 
-void TightBoostAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void OvertureAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     const std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
 
@@ -185,5 +185,5 @@ void TightBoostAudioProcessor::setStateInformation (const void* data, int sizeIn
 // This creates new instances of the plugin.
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new TightBoostAudioProcessor();
+    return new OvertureAudioProcessor();
 }

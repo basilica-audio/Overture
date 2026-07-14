@@ -3,16 +3,16 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
-#include "dsp/TightBoostEngine.h"
+#include "dsp/OvertureEngine.h"
 
-// Tight Boost: a TS-808-style tight overdrive/boost. Signal flow lives in
-// TightBoostEngine (src/dsp) so it stays unit-testable independent of this
+// Overture: a TS-808-style tight overdrive/boost. Signal flow lives in
+// OvertureEngine (src/dsp) so it stays unit-testable independent of this
 // AudioProcessor; this class is just APVTS + host plumbing around it.
-class TightBoostAudioProcessor final : public juce::AudioProcessor
+class OvertureAudioProcessor final : public juce::AudioProcessor
 {
 public:
-    TightBoostAudioProcessor();
-    ~TightBoostAudioProcessor() override;
+    OvertureAudioProcessor();
+    ~OvertureAudioProcessor() override;
 
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -51,7 +51,7 @@ public:
     juce::AudioProcessorValueTreeState apvts;
 
 private:
-    TightBoostEngine engine;
+    OvertureEngine engine;
 
     // Raw atomic pointers into the APVTS-managed parameter values, resolved
     // once at construction time so processBlock() never has to search for
@@ -62,5 +62,5 @@ private:
     std::atomic<float>* levelDb = nullptr;
     std::atomic<float>* mixPercent = nullptr;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TightBoostAudioProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvertureAudioProcessor)
 };

@@ -1,4 +1,4 @@
-#include "TightBoostEngine.h"
+#include "OvertureEngine.h"
 
 namespace
 {
@@ -15,9 +15,9 @@ namespace
     }
 }
 
-TightBoostEngine::TightBoostEngine() = default;
+OvertureEngine::OvertureEngine() = default;
 
-void TightBoostEngine::prepare (const juce::dsp::ProcessSpec& spec)
+void OvertureEngine::prepare (const juce::dsp::ProcessSpec& spec)
 {
     sampleRate = spec.sampleRate;
 
@@ -82,7 +82,7 @@ void TightBoostEngine::prepare (const juce::dsp::ProcessSpec& spec)
         sampleRate, clampBelowNyquist (lastToneHz, sampleRate), filterQ);
 }
 
-void TightBoostEngine::reset()
+void OvertureEngine::reset()
 {
     tightHighPass.reset();
     driveGain.reset();
@@ -95,35 +95,35 @@ void TightBoostEngine::reset()
     dryWetMixer.reset();
 }
 
-void TightBoostEngine::setDriveDb (float newDriveDb)
+void OvertureEngine::setDriveDb (float newDriveDb)
 {
     driveGain.setGainDecibels (newDriveDb);
 }
 
-void TightBoostEngine::setTightFrequencyHz (float newFrequencyHz)
+void OvertureEngine::setTightFrequencyHz (float newFrequencyHz)
 {
     lastTightHz = newFrequencyHz;
     tightFrequencySmoothed.setTargetValue (newFrequencyHz);
 }
 
-void TightBoostEngine::setToneFrequencyHz (float newFrequencyHz)
+void OvertureEngine::setToneFrequencyHz (float newFrequencyHz)
 {
     lastToneHz = newFrequencyHz;
     toneFrequencySmoothed.setTargetValue (newFrequencyHz);
 }
 
-void TightBoostEngine::setLevelDb (float newLevelDb)
+void OvertureEngine::setLevelDb (float newLevelDb)
 {
     outputLevel.setGainDecibels (newLevelDb);
 }
 
-void TightBoostEngine::setMixProportion (float newProportion01)
+void OvertureEngine::setMixProportion (float newProportion01)
 {
     lastMixProportion = newProportion01;
     mixSmoothed.setTargetValue (newProportion01);
 }
 
-void TightBoostEngine::process (juce::dsp::AudioBlock<float>& block)
+void OvertureEngine::process (juce::dsp::AudioBlock<float>& block)
 {
     const auto numSamples = block.getNumSamples();
 

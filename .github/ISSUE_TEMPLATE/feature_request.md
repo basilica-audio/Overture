@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea or enhancement for Tight Boost
+about: Suggest an idea or enhancement for Overture
 title: "[Feature] "
 labels: enhancement
 assignees: ''

@@ -1,7 +1,7 @@
 #pragma once
 
 // Central definition of all AudioProcessorValueTreeState parameter IDs for
-// Tight Boost. See docs/architecture.md for the corresponding signal-flow
+// Overture. See docs/architecture.md for the corresponding signal-flow
 // diagram.
 //
 // FROZEN AS OF THE v0.1 PARAMETER LAYOUT:
@@ -27,6 +27,6 @@ namespace ParamIDs
     inline constexpr auto level = "level";
 
     // Dry/wet mix. At 0% the plugin is a delay-compensated passthrough of
-    // the input (see TightBoostEngine's DryWetMixer usage).
+    // the input (see OvertureEngine's DryWetMixer usage).
     inline constexpr auto mix = "mix";
 }

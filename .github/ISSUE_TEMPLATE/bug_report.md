@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a problem with Tight Boost
+about: Report a problem with Overture
 title: "[Bug] "
 labels: bug
 assignees: ''

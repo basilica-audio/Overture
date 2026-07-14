@@ -45,12 +45,12 @@ namespace
 
 TEST_CASE ("Processor instantiates with the expected parameters", "[processor][parameters]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
     auto& apvts = processor.apvts;
 
     SECTION ("plugin name")
     {
-        CHECK (processor.getName() == juce::String ("Tight Boost"));
+        CHECK (processor.getName() == juce::String ("Overture"));
     }
 
     SECTION ("all documented parameter IDs resolve")

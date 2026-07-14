@@ -13,7 +13,7 @@ namespace
     constexpr int editorHeight = margin * 2 + labelHeight + knobSize + textBoxHeight;
 }
 
-TightBoostAudioProcessorEditor::TightBoostAudioProcessorEditor (TightBoostAudioProcessor& processorToEdit)
+OvertureAudioProcessorEditor::OvertureAudioProcessorEditor (OvertureAudioProcessor& processorToEdit)
     : juce::AudioProcessorEditor (&processorToEdit),
       audioProcessor (processorToEdit)
 {
@@ -27,9 +27,9 @@ TightBoostAudioProcessorEditor::TightBoostAudioProcessorEditor (TightBoostAudioP
     setSize (editorWidth, editorHeight);
 }
 
-TightBoostAudioProcessorEditor::~TightBoostAudioProcessorEditor() = default;
+OvertureAudioProcessorEditor::~OvertureAudioProcessorEditor() = default;
 
-void TightBoostAudioProcessorEditor::configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText)
+void OvertureAudioProcessorEditor::configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText)
 {
     knob.slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     knob.slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, knobSize, textBoxHeight);
@@ -46,7 +46,7 @@ void TightBoostAudioProcessorEditor::configureKnob (Knob& knob, const juce::Stri
     knob.attachment = std::make_unique<SliderAttachment> (audioProcessor.apvts, parameterId, knob.slider);
 }
 
-void TightBoostAudioProcessorEditor::resized()
+void OvertureAudioProcessorEditor::resized()
 {
     auto bounds = getLocalBounds().reduced (margin);
     bounds.removeFromTop (labelHeight); // room for the attached labels above each knob

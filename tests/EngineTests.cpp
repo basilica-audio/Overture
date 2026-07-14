@@ -1,4 +1,4 @@
-#include "dsp/TightBoostEngine.h"
+#include "dsp/OvertureEngine.h"
 #include "TestHelpers.h"
 
 #include <catch2/catch_approx.hpp>
@@ -26,7 +26,7 @@ namespace
 
 TEST_CASE ("Engine null test: 0% mix nulls against the input once shifted by latency", "[dsp][engine][null]")
 {
-    TightBoostEngine engine;
+    OvertureEngine engine;
 
     // Parameters other than Mix are deliberately set to non-neutral values:
     // a true null test has to prove the *entire* wet chain is bypassed, not
@@ -43,7 +43,7 @@ TEST_CASE ("Engine null test: 0% mix nulls against the input once shifted by lat
     const auto latency = engine.getLatencySamples();
     REQUIRE (latency >= 0);
     // Sanity bound: the oversampling latency must be well inside both the
-    // DryWetMixer's fixed dry-delay capacity (1024, see TightBoostEngine.h)
+    // DryWetMixer's fixed dry-delay capacity (1024, see OvertureEngine.h)
     // and the test block size, or the overlap window below would be
     // meaningless.
     REQUIRE (latency < testBlockSize / 2);
@@ -79,7 +79,7 @@ TEST_CASE ("Engine null test: 0% mix nulls against the input once shifted by lat
 
 TEST_CASE ("Engine sanity test: minimum drive keeps the wet path near-linear", "[dsp][engine]")
 {
-    TightBoostEngine engine;
+    OvertureEngine engine;
 
     // Minimum drive (0 dB), Tight/Tone set well outside the test tone's
     // passband edge so they contribute negligible magnitude/phase change at
@@ -153,7 +153,7 @@ TEST_CASE ("Engine sanity test: minimum drive keeps the wet path near-linear", "
 
 TEST_CASE ("Engine reset() clears filter/oversampler/delay state without crashing", "[dsp][engine]")
 {
-    TightBoostEngine engine;
+    OvertureEngine engine;
     engine.setDriveDb (30.0f);
     engine.setMixProportion (1.0f);
 

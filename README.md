@@ -1,16 +1,16 @@
-# Tight Boost
+# Overture
 
 *The 808 boost — tighten your low end before the gain hits.*
 
-[![CI](https://github.com/yves-vogl/tight-boost/actions/workflows/ci.yml/badge.svg)](https://github.com/yves-vogl/tight-boost/actions/workflows/ci.yml)
+[![CI](https://github.com/metal-up-your-ass/overture/actions/workflows/ci.yml/badge.svg)](https://github.com/metal-up-your-ass/overture/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-> **Work in progress.** Tight Boost is pre-1.0 and under active development. There are no built binaries or releases yet — building from source is currently the only way to run it. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
+> **Work in progress.** Overture is pre-1.0 and under active development. There are no built binaries or releases yet — building from source is currently the only way to run it. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
 
 <!-- ==BEGIN BODY== (plugin engineer: replace this block with What it is / Features / Signal flow / Roadmap) -->
 ## What it is
 
-Tight Boost is a TS-808-style tight overdrive/boost built on JUCE 8, aimed at the pre-amp tightening stage metal guitarists run in front of a high-gain amp: it strips low end before the clipper (the "808 boost" trick) so palm mutes stay tight instead of farting out into the gain stage, then drives an oversampled asymmetric soft clipper for the actual overdrive character.
+Overture is a TS-808-style tight overdrive/boost built on JUCE 8, aimed at the pre-amp tightening stage metal guitarists run in front of a high-gain amp: it strips low end before the clipper (the "808 boost" trick) so palm mutes stay tight instead of farting out into the gain stage, then drives an oversampled asymmetric soft clipper for the actual overdrive character.
 
 ## Features (v0.1 scope)
 
@@ -81,10 +81,10 @@ ctest --test-dir build --output-on-failure
 
 ## License
 
-Tight Boost is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPLv3).
+Overture is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPLv3).
 
 This project uses [JUCE](https://juce.com) 8, whose open-source tier is licensed under AGPLv3 (as of JUCE 8; JUCE 7 and earlier used GPLv3), which is why this project is AGPLv3 rather than GPLv3. See [`docs/adr/0002-agplv3-licensing.md`](docs/adr/0002-agplv3-licensing.md) for the full reasoning.
 
 VST is a registered trademark of Steinberg Media Technologies GmbH.
 
-Tight Boost is an independent open-source project and is not affiliated with, endorsed by, or sponsored by any plugin manufacturer.
+Overture is an independent open-source project and is not affiliated with, endorsed by, or sponsored by any plugin manufacturer.

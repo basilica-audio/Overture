@@ -3,7 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 // These tests document a JUCE 8.0.14 juce::dsp::DryWetMixer behaviour that
-// TightBoostEngine::prepare() depends on and works around: the mixer's
+// OvertureEngine::prepare() depends on and works around: the mixer's
 // internal dry/wet gain smoothers default their *target* to fully wet
 // (mix == 1.0) until setWetMixProportion() is called at least once, and
 // DryWetMixer::reset() (invoked by its own prepare()) only snaps the
@@ -12,7 +12,7 @@
 // value. Skipping the priming setWetMixProportion() call before prepare()
 // finishes would leave a fresh mixer audibly ramping in from 100% wet over
 // its internal 50ms default ramp, regardless of what the actual Mix
-// parameter was set to. See TightBoostEngine::prepare() for the fix.
+// parameter was set to. See OvertureEngine::prepare() for the fix.
 TEST_CASE ("DryWetMixer contract: without priming, a fresh mixer starts fully wet", "[dsp][drywetmixer][contract]")
 {
     juce::dsp::DryWetMixer<float> mixer (64);
@@ -56,7 +56,7 @@ TEST_CASE ("DryWetMixer contract: priming setWetMixProportion() before prepare()
     spec.maximumBlockSize = 128;
     spec.numChannels = 1;
 
-    // This is the fix TightBoostEngine::prepare() applies: prepare(), then
+    // This is the fix OvertureEngine::prepare() applies: prepare(), then
     // set the real target, then reset() so the smoothers snap current ==
     // target immediately rather than ramping in from the 1.0 default.
     mixer.prepare (spec);
@@ -90,7 +90,7 @@ TEST_CASE ("DryWetMixer contract: setWetMixProportion() alone (no reset()) still
     // not, by itself, snap their *current* value. Without a following
     // reset(), a fresh mixer's default-wet current value (see the first
     // test above) is still ramping towards the requested proportion tens of
-    // milliseconds later. This is why TightBoostEngine::prepare() calls
+    // milliseconds later. This is why OvertureEngine::prepare() calls
     // setWetMixProportion() *and* relies on the subsequent reset() (not
     // just the setter) to make the target take effect immediately.
     juce::dsp::DryWetMixer<float> mixer (64);

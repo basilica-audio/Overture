@@ -4,7 +4,7 @@
 
 #include "AsymSoftClipper.h"
 
-// The complete Tight Boost signal path, independent of juce::AudioProcessor
+// The complete Overture signal path, independent of juce::AudioProcessor
 // so it can be exercised directly by unit tests without instantiating a
 // full plugin (see tests/EngineTests.cpp). Owns all DSP state; every
 // buffer/filter/oversampler is allocated in prepare() and never reallocated
@@ -20,10 +20,10 @@
 // latency via juce::dsp::DryWetMixer, so Mix at 0% is a sample-accurate
 // (once shifted by getLatencySamples()) passthrough of the input - this is
 // what the plugin's null test (tests/EngineTests.cpp) exercises.
-class TightBoostEngine
+class OvertureEngine
 {
 public:
-    TightBoostEngine();
+    OvertureEngine();
 
     // Allocates all DSP state. Must be called (and completed) before the
     // first process() call, and again whenever sample rate/block size/
@@ -91,5 +91,5 @@ private:
 
     int latencySamples = 0;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TightBoostEngine)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvertureEngine)
 };

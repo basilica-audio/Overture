@@ -6,7 +6,7 @@
 
 TEST_CASE ("State round-trip preserves non-default values of every parameter", "[state]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
     processor.prepareToPlay (48000.0, 512);
 
     auto* tightParam = processor.apvts.getParameter (ParamIDs::tight);

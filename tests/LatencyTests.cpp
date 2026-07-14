@@ -1,11 +1,11 @@
 #include "PluginProcessor.h"
-#include "dsp/TightBoostEngine.h"
+#include "dsp/OvertureEngine.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE ("getLatencySamples() reports the oversampling latency after prepareToPlay", "[latency]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
 
     // Before prepareToPlay, no engine has been prepared yet - JUCE's default
     // AudioProcessor latency is 0.
@@ -16,7 +16,7 @@ TEST_CASE ("getLatencySamples() reports the oversampling latency after prepareTo
     // Cross-check against a standalone engine prepared identically: the
     // processor must report exactly what the engine (i.e. the oversampler)
     // computes, not an approximation of it.
-    TightBoostEngine referenceEngine;
+    OvertureEngine referenceEngine;
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = 48000.0;
     spec.maximumBlockSize = 512;
@@ -29,7 +29,7 @@ TEST_CASE ("getLatencySamples() reports the oversampling latency after prepareTo
 
 TEST_CASE ("Latency is stable across repeated prepareToPlay calls at the same sample rate", "[latency]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
 
     processor.prepareToPlay (44100.0, 256);
     const auto firstLatency = processor.getLatencySamples();
@@ -42,7 +42,7 @@ TEST_CASE ("Latency is stable across repeated prepareToPlay calls at the same sa
 
 TEST_CASE ("Latency updates correctly when the sample rate changes", "[latency]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
 
     processor.prepareToPlay (44100.0, 512);
     const auto latencyAt44k = processor.getLatencySamples();

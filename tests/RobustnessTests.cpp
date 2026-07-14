@@ -9,7 +9,7 @@
 
 namespace
 {
-    void setParam (TightBoostAudioProcessor& processor, const char* id, float realValue)
+    void setParam (OvertureAudioProcessor& processor, const char* id, float realValue)
     {
         auto* param = processor.apvts.getParameter (id);
         REQUIRE (param != nullptr);
@@ -19,7 +19,7 @@ namespace
 
 TEST_CASE ("Silence produces silence (and no NaN/Inf)", "[robustness]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
     processor.prepareToPlay (48000.0, 512);
 
     setParam (processor, ParamIDs::drive, 40.0f);
@@ -38,7 +38,7 @@ TEST_CASE ("Silence produces silence (and no NaN/Inf)", "[robustness]")
 
 TEST_CASE ("Full-scale input at maximum drive produces no NaN/Inf", "[robustness]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
     processor.prepareToPlay (48000.0, 512);
 
     setParam (processor, ParamIDs::drive, 40.0f);
@@ -61,7 +61,7 @@ TEST_CASE ("Full-scale input at maximum drive produces no NaN/Inf", "[robustness
 
 TEST_CASE ("Denormal-range input produces no NaN/Inf output", "[robustness]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
     processor.prepareToPlay (48000.0, 512);
 
     setParam (processor, ParamIDs::drive, 20.0f);
@@ -90,7 +90,7 @@ TEST_CASE ("Denormal-range input produces no NaN/Inf output", "[robustness]")
 
 TEST_CASE ("Zero-sample buffer does not crash processBlock", "[robustness]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
     processor.prepareToPlay (48000.0, 512);
 
     juce::AudioBuffer<float> buffer (2, 0);
@@ -102,7 +102,7 @@ TEST_CASE ("Zero-sample buffer does not crash processBlock", "[robustness]")
 
 TEST_CASE ("Extreme parameter values at both range edges produce no NaN/Inf", "[robustness]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
     processor.prepareToPlay (44100.0, 256);
 
     juce::AudioBuffer<float> buffer (2, 256);
@@ -125,7 +125,7 @@ TEST_CASE ("Extreme parameter values at both range edges produce no NaN/Inf", "[
 
 TEST_CASE ("Rapid parameter automation across many blocks produces no NaN/Inf", "[robustness]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
     processor.prepareToPlay (48000.0, 256);
 
     std::mt19937 rng (1234);
@@ -151,7 +151,7 @@ TEST_CASE ("Rapid parameter automation across many blocks produces no NaN/Inf", 
 
 TEST_CASE ("reset() followed by processBlock does not crash", "[robustness]")
 {
-    TightBoostAudioProcessor processor;
+    OvertureAudioProcessor processor;
     processor.prepareToPlay (48000.0, 512);
 
     setParam (processor, ParamIDs::drive, 30.0f);

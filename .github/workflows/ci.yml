@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ARTEFACT_ROOT="build/TightBoost_artefacts"
+          ARTEFACT_ROOT="build/Overture_artefacts"
           # JUCE's artefact path may or may not include a Release/ segment
           # depending on whether the generator is single- or multi-config.
           VST3_PATH=$(find "$ARTEFACT_ROOT" -type d -iname "*.vst3" | head -n 1)
@@ -141,11 +141,11 @@ jobs:
           mkdir -p ~/Library/Audio/Plug-Ins/Components
           cp -R "${{ steps.artefacts.outputs.component_path }}" ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar || true
-          auval -strict -v aufx Tbst Yvsv
+          auval -strict -v aufx Ovtr Yvsv
 
       - name: Upload plugin artefacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tight-boost-${{ matrix.os }}
-          path: build/TightBoost_artefacts/**
+          name: overture-${{ matrix.os }}
+          path: build/Overture_artefacts/**
           if-no-files-found: error

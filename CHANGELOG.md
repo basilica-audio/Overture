@@ -10,4 +10,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Project bootstrap: README, license, contributing guide, architecture and build docs, ADRs, and CI workflow.
-- DSP core: initial working Tight Boost signal path with unit tests.
+- DSP core: initial working Overture signal path with unit tests.
