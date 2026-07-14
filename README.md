@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/icon.png" alt="Overture icon" width="160"/></p>
+
 # Overture
 
 *The 808 boost — tighten your low end before the gain hits.*
