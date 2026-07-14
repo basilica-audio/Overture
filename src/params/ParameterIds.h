@@ -29,4 +29,23 @@ namespace ParamIDs
     // Dry/wet mix. At 0% the plugin is a delay-compensated passthrough of
     // the input (see OvertureEngine's DryWetMixer usage).
     inline constexpr auto mix = "mix";
+
+    // Host-visible soft bypass: internally forces the wet chain's effective
+    // mix to 0% rather than skipping processing outright, so the reported
+    // oversampling latency (and therefore host plugin-delay-compensation)
+    // stays valid and glitch-free while bypassed. See
+    // OvertureAudioProcessor::getBypassParameter().
+    inline constexpr auto bypass = "bypass";
+
+    // Clipper voicing: selects between the asymmetric (default, v0.1),
+    // symmetric soft, and hard-clip nonlinearities. Indexes into the
+    // ClipperVoicing enum (src/dsp/ClipperVoicing.h) - see that file's
+    // frozen-enum-value contract.
+    inline constexpr auto voicing = "voicing";
+
+    // Oversampling factor (2x/4x/8x). Reconstructing the internal
+    // oversampler allocates, so a change here only takes effect on the
+    // next prepareToPlay() call, not instantaneously mid-stream - see
+    // OvertureEngine::setOversamplingFactorPow2().
+    inline constexpr auto oversampling = "oversampling";
 }

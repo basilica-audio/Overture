@@ -25,21 +25,24 @@ void OvertureEngine::prepare (const juce::dsp::ProcessSpec& spec)
     driveGain.setRampDurationSeconds (smoothingTimeSeconds);
     driveGain.prepare (spec);
 
-    // 4x oversampling (2^2), half-band polyphase IIR: much lower latency
-    // than the equiripple FIR alternative for a given stopband quality,
-    // which matters here because that latency is exactly what has to be
-    // compensated on the dry path below. useIntegerLatency=true so the
-    // reported latency (and therefore setLatencySamples()) is an exact
+    // Oversampling factor is 2^oversamplingFactorPow2 (2x/4x/8x, selected
+    // via setOversamplingFactorPow2() - defaults to 2, i.e. 4x, matching
+    // the v0.1 fixed behaviour), half-band polyphase IIR: much lower
+    // latency than the equiripple FIR alternative for a given stopband
+    // quality, which matters here because that latency is exactly what has
+    // to be compensated on the dry path below. useIntegerLatency=true so
+    // the reported latency (and therefore setLatencySamples()) is an exact
     // integer sample count rather than something we'd have to round.
     oversampler = std::make_unique<juce::dsp::Oversampling<float>> (
         spec.numChannels,
-        oversamplingFactorPow2,
+        static_cast<size_t> (oversamplingFactorPow2),
         juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
         true,
         true);
     oversampler->initProcessing (static_cast<size_t> (spec.maximumBlockSize));
 
-    toneLowPass.prepare (spec);
+    toneLowPassStage1.prepare (spec);
+    toneLowPassStage2.prepare (spec);
     outputLevel.setRampDurationSeconds (smoothingTimeSeconds);
     outputLevel.prepare (spec);
 
@@ -75,11 +78,14 @@ void OvertureEngine::prepare (const juce::dsp::ProcessSpec& spec)
 
     // Prime the filter coefficients immediately so the very first
     // process() call runs with correct, non-default coefficients rather
-    // than an identity/uninitialised state.
+    // than an identity/uninitialised state. Tone is two cascaded 2nd-order
+    // sections at the same cutoff but different Q (toneFilterQ1/Q2),
+    // forming a single 4th-order Butterworth response.
     *tightHighPass.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass (
-        sampleRate, clampBelowNyquist (lastTightHz, sampleRate), filterQ);
-    *toneLowPass.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (
-        sampleRate, clampBelowNyquist (lastToneHz, sampleRate), filterQ);
+        sampleRate, clampBelowNyquist (lastTightHz, sampleRate), tightFilterQ);
+    const auto toneHzClamped = clampBelowNyquist (lastToneHz, sampleRate);
+    *toneLowPassStage1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHzClamped, toneFilterQ1);
+    *toneLowPassStage2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHzClamped, toneFilterQ2);
 }
 
 void OvertureEngine::reset()
@@ -90,7 +96,8 @@ void OvertureEngine::reset()
     if (oversampler != nullptr)
         oversampler->reset();
 
-    toneLowPass.reset();
+    toneLowPassStage1.reset();
+    toneLowPassStage2.reset();
     outputLevel.reset();
     dryWetMixer.reset();
 }
@@ -123,6 +130,16 @@ void OvertureEngine::setMixProportion (float newProportion01)
     mixSmoothed.setTargetValue (newProportion01);
 }
 
+void OvertureEngine::setClipperVoicing (ClipperVoicing newVoicing) noexcept
+{
+    currentVoicing = newVoicing;
+}
+
+void OvertureEngine::setOversamplingFactorPow2 (int newFactorPow2) noexcept
+{
+    oversamplingFactorPow2 = juce::jlimit (1, 3, newFactorPow2);
+}
+
 void OvertureEngine::process (juce::dsp::AudioBlock<float>& block)
 {
     const auto numSamples = block.getNumSamples();
@@ -140,8 +157,11 @@ void OvertureEngine::process (juce::dsp::AudioBlock<float>& block)
     const auto toneHz = clampBelowNyquist (toneFrequencySmoothed.skip (static_cast<int> (numSamples)), sampleRate);
     const auto wetMix = mixSmoothed.skip (static_cast<int> (numSamples));
 
-    *tightHighPass.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass (sampleRate, tightHz, filterQ);
-    *toneLowPass.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHz, filterQ);
+    *tightHighPass.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass (sampleRate, tightHz, tightFilterQ);
+    // Both tone sections share the same cutoff; only Q differs, per the
+    // 4th-order Butterworth cascade design (see toneFilterQ1/Q2 docs).
+    *toneLowPassStage1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ1);
+    *toneLowPassStage2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ2);
     dryWetMixer.setWetMixProportion (wetMix);
 
     juce::dsp::ProcessContextReplacing<float> context (block);
@@ -157,17 +177,21 @@ void OvertureEngine::process (juce::dsp::AudioBlock<float>& block)
 
     auto oversampledBlock = oversampler->processSamplesUp (block);
 
+    // currentVoicing does not change mid-block (set at most once per
+    // process() call from the processor's atomic parameter read), so this
+    // switch is effectively free per sample - see ClipperVoicings::processSample.
     for (size_t channel = 0; channel < oversampledBlock.getNumChannels(); ++channel)
     {
         auto* channelData = oversampledBlock.getChannelPointer (channel);
 
         for (size_t sample = 0; sample < oversampledBlock.getNumSamples(); ++sample)
-            channelData[sample] = AsymSoftClipper::processSample (channelData[sample], clipperAsymmetry);
+            channelData[sample] = ClipperVoicings::processSample (channelData[sample], currentVoicing, clipperAsymmetry);
     }
 
     oversampler->processSamplesDown (block);
 
-    toneLowPass.process (context);
+    toneLowPassStage1.process (context);
+    toneLowPassStage2.process (context);
     outputLevel.process (context);
 
     dryWetMixer.mixWetSamples (block);

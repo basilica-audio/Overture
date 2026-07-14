@@ -15,12 +15,18 @@ OvertureAudioProcessor::OvertureAudioProcessor()
     toneHz = apvts.getRawParameterValue (ParamIDs::tone);
     levelDb = apvts.getRawParameterValue (ParamIDs::level);
     mixPercent = apvts.getRawParameterValue (ParamIDs::mix);
+    bypassFlag = apvts.getRawParameterValue (ParamIDs::bypass);
+    voicingChoice = apvts.getRawParameterValue (ParamIDs::voicing);
+    oversamplingChoice = apvts.getRawParameterValue (ParamIDs::oversampling);
 
     jassert (tightHz != nullptr);
     jassert (driveDb != nullptr);
     jassert (toneHz != nullptr);
     jassert (levelDb != nullptr);
     jassert (mixPercent != nullptr);
+    jassert (bypassFlag != nullptr);
+    jassert (voicingChoice != nullptr);
+    jassert (oversamplingChoice != nullptr);
 }
 
 OvertureAudioProcessor::~OvertureAudioProcessor() = default;
@@ -97,6 +103,17 @@ void OvertureAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     engine.setToneFrequencyHz (toneHz->load (std::memory_order_relaxed));
     engine.setLevelDb (levelDb->load (std::memory_order_relaxed));
     engine.setMixProportion (mixPercent->load (std::memory_order_relaxed) * 0.01f);
+    engine.setClipperVoicing (static_cast<ClipperVoicing> (static_cast<int> (voicingChoice->load (std::memory_order_relaxed))));
+
+    // Oversampling factor: reconstructing the internal juce::dsp::Oversampling
+    // instance allocates, so it is only ever (re)constructed here, inside
+    // engine.prepare() below - never from processBlock(). This means a
+    // mid-stream change to the Oversampling parameter only takes effect the
+    // next time the host calls prepareToPlay() (transport stop/start,
+    // sample-rate change, etc.), not instantaneously - documented in
+    // docs/manual.md.
+    const auto oversamplingChoiceIndex = static_cast<int> (oversamplingChoice->load (std::memory_order_relaxed));
+    engine.setOversamplingFactorPow2 (oversamplingChoiceIndex + 1); // index 0/1/2 -> 2x/4x/8x
 
     engine.prepare (spec);
 
@@ -148,10 +165,25 @@ void OvertureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     engine.setDriveDb (driveDb->load (std::memory_order_relaxed));
     engine.setToneFrequencyHz (toneHz->load (std::memory_order_relaxed));
     engine.setLevelDb (levelDb->load (std::memory_order_relaxed));
-    engine.setMixProportion (mixPercent->load (std::memory_order_relaxed) * 0.01f);
+    engine.setClipperVoicing (static_cast<ClipperVoicing> (static_cast<int> (voicingChoice->load (std::memory_order_relaxed))));
+
+    // Soft bypass: force the wet chain's effective mix to 0% instead of
+    // skipping engine.process() outright, so the oversampler keeps running
+    // and the plugin's reported latency (host PDC) stays valid and
+    // glitch-free while bypassed - see ParamIDs::bypass and
+    // getBypassParameter().
+    const auto isBypassed = bypassFlag->load (std::memory_order_relaxed) >= 0.5f;
+    const auto requestedMixProportion = mixPercent->load (std::memory_order_relaxed) * 0.01f;
+    engine.setMixProportion (isBypassed ? 0.0f : requestedMixProportion);
 
     juce::dsp::AudioBlock<float> block (buffer);
     engine.process (block);
+}
+
+//==============================================================================
+juce::AudioProcessorParameter* OvertureAudioProcessor::getBypassParameter() const
+{
+    return apvts.getParameter (ParamIDs::bypass);
 }
 
 //==============================================================================

@@ -23,6 +23,15 @@ public:
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
+    // Returns the "bypass" parameter so AU/VST3/AAX/LV2 hosts treat it as
+    // native soft bypass (see ParamIDs::bypass). processBlock() checks this
+    // parameter itself and forces the wet chain's effective mix to 0% while
+    // bypassed, rather than this class ever implementing
+    // processBlockBypassed() - that keeps the oversampler running and the
+    // reported latency valid throughout, avoiding a PDC glitch on bypass
+    // toggle. See JUCE 8.0.14 juce::AudioProcessor::getBypassParameter().
+    juce::AudioProcessorParameter* getBypassParameter() const override;
+
     //==============================================================================
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
@@ -61,6 +70,9 @@ private:
     std::atomic<float>* toneHz = nullptr;
     std::atomic<float>* levelDb = nullptr;
     std::atomic<float>* mixPercent = nullptr;
+    std::atomic<float>* bypassFlag = nullptr;
+    std::atomic<float>* voicingChoice = nullptr;
+    std::atomic<float>* oversamplingChoice = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvertureAudioProcessor)
 };
