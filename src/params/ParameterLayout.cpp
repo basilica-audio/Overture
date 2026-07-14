@@ -26,31 +26,42 @@ namespace tbst
         juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
         //======================================================================
-        // Tight: high-pass pre-emphasis, 20-400 Hz, default 150 Hz - the
-        // "808 boost" tightening knob that strips low end before the clipper.
+        // Tight: high-pass pre-emphasis, 20-400 Hz, default 130 Hz - the
+        // "808 boost" tightening knob that strips low end before the
+        // clipper. 130 Hz sits close to the classic "808-mod" HPF corner
+        // used ahead of a high-gain amp: high enough to keep palm mutes on
+        // drop-tuned guitars tight, low enough to leave the fundamental of
+        // open/low chords intact.
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { ParamIDs::tight, 1 },
             "Tight",
             makeLogFrequencyRange (20.0f, 400.0f),
-            150.0f,
+            130.0f,
             juce::AudioParameterFloatAttributes().withLabel ("Hz")));
 
         //======================================================================
-        // Drive: gain into the oversampled asymmetric soft clipper.
+        // Drive: gain into the oversampled clipper (voicing selected via
+        // ParamIDs::voicing). Default 8 dB: a boost stage run in front of an
+        // already-driven amp typically only needs a modest push rather than
+        // heavy clipper-generated distortion of its own - the amp's own
+        // gain stage does the rest.
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { ParamIDs::drive, 1 },
             "Drive",
             juce::NormalisableRange<float> (0.0f, 40.0f, 0.01f),
-            12.0f,
+            8.0f,
             juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
         //======================================================================
-        // Tone: post-clip low-pass tilt, 1-8 kHz, default 5 kHz.
+        // Tone: post-clip low-pass tilt (4th-order Butterworth, see
+        // OvertureEngine), 1-8 kHz, default 6 kHz. Left comparatively bright
+        // by default so the amp's own tone stack - not this pre-clip
+        // tightening stage - handles final top-end voicing.
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { ParamIDs::tone, 1 },
             "Tone",
             makeLogFrequencyRange (1000.0f, 8000.0f),
-            5000.0f,
+            6000.0f,
             juce::AudioParameterFloatAttributes().withLabel ("Hz")));
 
         //======================================================================
@@ -71,6 +82,34 @@ namespace tbst
             juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
             100.0f,
             juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        //======================================================================
+        // Bypass: host-visible soft bypass (see ParamIDs::bypass and
+        // OvertureAudioProcessor::getBypassParameter()).
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::bypass, 1 },
+            "Bypass",
+            false));
+
+        //======================================================================
+        // Voicing: selects the clipper nonlinearity (src/dsp/ClipperVoicing.h).
+        // Default index 0 (Asymmetric) matches the original v0.1 behaviour.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::voicing, 1 },
+            "Voicing",
+            juce::StringArray { "Asymmetric", "Soft Symmetric", "Hard Clip" },
+            0));
+
+        //======================================================================
+        // Oversampling: 2x/4x/8x. Default index 1 (4x) matches the fixed
+        // factor the v0.1 engine always used. Takes effect on the next
+        // prepareToPlay() call rather than instantaneously - see
+        // OvertureEngine::setOversamplingFactorPow2().
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::oversampling, 1 },
+            "Oversampling",
+            juce::StringArray { "2x", "4x", "8x" },
+            1));
 
         return layout;
     }
