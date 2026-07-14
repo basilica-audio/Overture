@@ -3,16 +3,17 @@
 Per-repo working memory for Claude Code sessions on this plugin. Part of the **Metal up your ass** symphonic-metal plugin suite (`github.com/metal-up-your-ass`).
 
 ## What this is
-Overture is a TS-808-style **tight boost / overdrive** for metal guitar — the pre-amp tightening stage run in front of a high-gain amp. It strips low end before the clipper (the "808 boost" trick) so palm mutes stay tight, then drives an oversampled asymmetric soft clipper for overdrive character. AU / VST3 / Standalone.
+Overture is a TS-808-style **tight boost / overdrive** for metal guitar — the pre-amp tightening stage run in front of a high-gain amp. It strips low end before the clipper (the "808 boost" trick) so palm mutes stay tight, then drives an oversampled, selectable-voicing soft/hard clipper for overdrive character. AU / VST3 / Standalone.
 
-## Status (v0.1 — bootstrap complete)
-Core DSP working, **23/23 Catch2 tests green**, CI (macOS + Windows, pluginval strictness 10 + auval) green. GUI is a functional v0.1 slider editor (custom LookAndFeel is roadmap M3). No signing yet (roadmap M4). See GitHub **milestones/issues** for the open work.
+## Status (v0.1.0 — M1 DSP completion & test coverage done)
+Core DSP complete for v0.1.0, **51/51 Catch2 tests green** locally. GUI is a functional v0.1 slider/toggle/combo-box editor covering every parameter (custom LookAndFeel is roadmap M3). No signing yet (roadmap M4). See GitHub **milestones/issues** for the open work.
 
 ## DSP
-Signal: `input → Tight HPF (2nd-order Butterworth, 20–400 Hz) → Drive → 4× oversampled asymmetric tanh clipper → Tone LPF (1–8 kHz) → Level → juce::dsp::DryWetMixer`.
-- Engine: `src/dsp/OvertureEngine.{h,cpp}` (processor-independent, unit-testable) + `src/dsp/AsymSoftClipper.h` (stateless `y = tanh(x+a) − tanh(a)`, a=0.2).
-- Params (APVTS, `src/params/`): `tight`, `drive`, `tone`, `level`, `mix`.
-- Latency = oversampler latency, reported via `setLatencySamples`; dry path delay-compensated by `DryWetMixer::setWetLatency`.
+Signal: `input → Tight HPF (2nd-order Butterworth, 20–400 Hz) → Drive → Nx oversampled (2x/4x/8x) selectable clipper (Voicing) → Tone LPF (4th-order Butterworth cascade, 1–8 kHz) → Level → juce::dsp::DryWetMixer`. Bypass reuses the Mix path (forces effective mix to 0%, crossfaded) rather than skipping processing, so reported latency never changes on a bypass toggle.
+- Engine: `src/dsp/OvertureEngine.{h,cpp}` (processor-independent, unit-testable) + `src/dsp/AsymSoftClipper.h` + `src/dsp/ClipperVoicing.h` (three stateless clipper voicings + dispatch enum).
+- Params (APVTS, `src/params/`): `tight` (130 Hz default), `drive` (8 dB default), `tone` (6000 Hz default), `level`, `mix`, `bypass`, `voicing`, `oversampling`. Defaults tuned for a boost-in-front-of-a-driven-amp use case, not a standalone distortion.
+- Latency = oversampler latency, reported via `setLatencySamples`; dry path (and Bypass) delay-compensated by `DryWetMixer::setWetLatency`. Oversampling-factor changes only take effect on the next `prepareToPlay()` (reconstructing the oversampler allocates, so it never happens on the audio thread) - see `docs/architecture.md`.
+- User-facing docs: `docs/manual.md` (full parameter reference + tips).
 
 ## Build & test
 ```sh

@@ -10,39 +10,42 @@
 <!-- ==BEGIN BODY== (plugin engineer: replace this block with What it is / Features / Signal flow / Roadmap) -->
 ## What it is
 
-Overture is a TS-808-style tight overdrive/boost built on JUCE 8, aimed at the pre-amp tightening stage metal guitarists run in front of a high-gain amp: it strips low end before the clipper (the "808 boost" trick) so palm mutes stay tight instead of farting out into the gain stage, then drives an oversampled asymmetric soft clipper for the actual overdrive character.
+Overture is a TS-808-style tight overdrive/boost built on JUCE 8, aimed at the pre-amp tightening stage metal guitarists run in front of a high-gain amp: it strips low end before the clipper (the "808 boost" trick) so palm mutes stay tight instead of farting out into the gain stage, then drives an oversampled, selectable-voicing clipper for the actual overdrive character. See [`docs/manual.md`](docs/manual.md) for the full user manual (signal flow, every parameter explained, and usage tips).
 
-## Features (v0.1 scope)
+## Features (v0.1.0 scope)
 
-- **Tight** - high-pass pre-emphasis, 20 Hz - 400 Hz (default 150 Hz), removes low end before the clipper
+- **Tight** - high-pass pre-emphasis, 20 Hz - 400 Hz (default 130 Hz), removes low end before the clipper
 - **Drive** - 0 - 40 dB of gain into the clipper
-- **Asymmetric soft clip** - tanh-based clipper with a fixed asymmetry bias, run inside 4x oversampling to keep aliasing out of the clipped signal
-- **Tone** - post-clip low-pass, 1 kHz - 8 kHz (default 5 kHz), tames fizz without touching the fundamental
+- **Voicing** - Asymmetric (biased tanh, the original "808 boost" character), Soft Symmetric (unbiased tanh), or Hard Clip (straight clamp), run inside oversampling to keep aliasing out of the clipped signal
+- **Tone** - post-clip low-pass, 1 kHz - 8 kHz (default 6 kHz), 4th-order (24 dB/oct) for effective fizz control without touching the fundamental
 - **Level** - output trim, -24 dB to +24 dB
 - **Mix** - dry/wet, with the dry path delay-compensated against the oversampling latency so Mix at 0% is a sample-accurate passthrough
+- **Bypass** - host-visible soft bypass; keeps the oversampler running and latency reporting stable, crossfades instead of clicking
+- **Oversampling** - 2x / 4x / 8x, selectable; takes effect on the next host re-initialisation (real-time-safe by design - see [`docs/manual.md`](docs/manual.md))
 - Full state save/recall via `AudioProcessorValueTreeState`
 
 ## Signal flow
 
 ```
-Input --> Tight (HPF, 20-400 Hz) --> Drive (0-40 dB) --> [4x oversampled] Asym soft clip
+Input --> Tight (HPF, 20-400 Hz) --> Drive (0-40 dB) --> [oversampled] Voicing clipper
                                                                   |
-      Output <-- Mix <-- Level (output trim) <-- Tone (LPF, 1-8 kHz) <--+
+      Output <-- Mix <-- Level (output trim) <-- Tone (4th-order LPF, 1-8 kHz) <--+
         ^
         |
-   delay-compensated dry path
+   delay-compensated dry path (also used by Bypass)
 ```
 
-See [`docs/architecture.md`](docs/architecture.md) for the full breakdown, including the oversampling/latency-compensation strategy and parameter smoothing.
+See [`docs/architecture.md`](docs/architecture.md) for the full engineering breakdown, including the oversampling/latency-compensation strategy and parameter smoothing.
 
 ## Roadmap
 
 | Milestone | Description | Status |
 |---|---|---|
 | M0 | Bootstrap - project skeleton, CI, docs | Done |
-| M1 | DSP core - Tight/Drive/clip/Tone/Level/Mix signal path, oversampling + latency compensation, unit tests | Done |
-| M2 | Custom GUI | Planned |
-| M3 | Release engineering - signing, notarization, installers, v1.0.0 | Planned |
+| M1 | DSP completion & test coverage - Voicing/Bypass/Oversampling, 4th-order Tone stack, tuned defaults, broadened Catch2 suite | Done |
+| M2 | Presets & state recall | Planned |
+| M3 | Custom GUI & accessibility | Planned |
+| M4 | Release engineering - signing, notarization, installers, v1.0.0 | Planned |
 <!-- ==END BODY== -->
 
 ## Installation
