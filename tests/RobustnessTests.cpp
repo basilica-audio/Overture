@@ -149,6 +149,144 @@ TEST_CASE ("Rapid parameter automation across many blocks produces no NaN/Inf", 
     }
 }
 
+TEST_CASE ("Bypass parameter forces a delay-compensated passthrough regardless of other parameters", "[robustness][bypass]")
+{
+    // Mirrors EngineTests.cpp's "0% mix nulls against the input" null test,
+    // but drives the *host-visible Bypass parameter* end-to-end through
+    // OvertureAudioProcessor rather than calling OvertureEngine::setMixProportion()
+    // directly, proving the processBlock()-level wiring (getBypassParameter(),
+    // the bypassFlag atomic, and the mix override) actually works.
+    OvertureAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 8192);
+
+    setParam (processor, ParamIDs::bypass, 1.0f);
+    // Deliberately non-neutral settings elsewhere: a true bypass test has to
+    // prove the *entire* wet chain is bypassed, not just quiet by default.
+    setParam (processor, ParamIDs::drive, 30.0f);
+    setParam (processor, ParamIDs::tight, 300.0f);
+    setParam (processor, ParamIDs::tone, 2000.0f);
+    setParam (processor, ParamIDs::level, 12.0f);
+    setParam (processor, ParamIDs::mix, 100.0f); // Mix itself says "fully wet" - Bypass must override it
+
+    const auto latency = processor.getLatencySamples();
+    REQUIRE (latency > 0);
+    REQUIRE (latency < 8192 / 2);
+
+    juce::MidiBuffer midi;
+
+    // Unlike prepare()'s Mix priming (which snaps the DryWetMixer's
+    // internal smoother's current value straight to its target - see
+    // OvertureEngine::prepare()), engaging Bypass mid-stream goes through
+    // the *normal*, intentionally-smoothed Mix path so a live bypass toggle
+    // crossfades instead of clicking. That means it takes both the engine's
+    // ~50ms mixSmoothed ramp and the DryWetMixer's own ~50ms internal ramp
+    // (see tests/DryWetMixerContractTests.cpp) to fully settle to null -
+    // worst case, close to 100ms. Warm up for well over that (~340ms, two
+    // 8192-sample blocks at 48kHz) before measuring, the same "let it
+    // settle before measuring" technique EngineTests.cpp's near-linear test
+    // uses for the Tight HPF's turn-on transient.
+    juce::AudioBuffer<float> warmup (2, 8192);
+    TestHelpers::fillWithSine (warmup, 48000.0, 1000.0, 0.5f, 0);
+    processor.processBlock (warmup, midi);
+    TestHelpers::fillWithSine (warmup, 48000.0, 1000.0, 0.5f, 8192);
+    processor.processBlock (warmup, midi);
+
+    juce::AudioBuffer<float> reference (2, 8192);
+    TestHelpers::fillWithSine (reference, 48000.0, 1000.0, 0.5f, 2 * 8192);
+
+    juce::AudioBuffer<float> processed;
+    processed.makeCopyOf (reference);
+
+    processor.processBlock (processed, midi);
+
+    const auto overlapLength = 8192 - latency;
+    REQUIRE (overlapLength > 8192 / 2);
+
+    constexpr float tolerance = 3.1623e-5f; // < -90 dBFS residual
+
+    for (int channel = 0; channel < reference.getNumChannels(); ++channel)
+    {
+        const auto* refData = reference.getReadPointer (channel);
+        const auto* outData = processed.getReadPointer (channel);
+
+        float maxResidual = 0.0f;
+
+        for (int i = 0; i < overlapLength; ++i)
+            maxResidual = std::max (maxResidual, std::abs (outData[latency + i] - refData[i]));
+
+        CHECK (maxResidual < tolerance);
+    }
+}
+
+TEST_CASE ("Toggling Bypass on and off across many blocks produces no NaN/Inf", "[robustness][bypass]")
+{
+    OvertureAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 256);
+
+    setParam (processor, ParamIDs::drive, 25.0f);
+    setParam (processor, ParamIDs::mix, 100.0f);
+
+    juce::MidiBuffer midi;
+
+    for (int block = 0; block < 50; ++block)
+    {
+        setParam (processor, ParamIDs::bypass, (block % 2 == 0) ? 1.0f : 0.0f);
+
+        juce::AudioBuffer<float> buffer (2, 256);
+        TestHelpers::fillWithSine (buffer, 48000.0, 1000.0, 0.8f);
+
+        CHECK_NOTHROW (processor.processBlock (buffer, midi));
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+    }
+}
+
+TEST_CASE ("Each clipper voicing produces no NaN/Inf at maximum drive", "[robustness][voicing]")
+{
+    for (float voicingIndex : { 0.0f, 1.0f, 2.0f })
+    {
+        OvertureAudioProcessor processor;
+        processor.prepareToPlay (48000.0, 512);
+
+        setParam (processor, ParamIDs::voicing, voicingIndex);
+        setParam (processor, ParamIDs::drive, 40.0f);
+        setParam (processor, ParamIDs::mix, 100.0f);
+
+        juce::AudioBuffer<float> buffer (2, 512);
+        TestHelpers::fillWithSine (buffer, 48000.0, 1000.0, 1.0f);
+
+        juce::MidiBuffer midi;
+
+        for (int i = 0; i < 8; ++i)
+            CHECK_NOTHROW (processor.processBlock (buffer, midi));
+
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+    }
+}
+
+TEST_CASE ("Each oversampling factor produces no NaN/Inf at maximum drive", "[robustness][oversampling]")
+{
+    for (float oversamplingIndex : { 0.0f, 1.0f, 2.0f }) // 2x, 4x, 8x
+    {
+        OvertureAudioProcessor processor;
+
+        setParam (processor, ParamIDs::oversampling, oversamplingIndex);
+        processor.prepareToPlay (48000.0, 512); // factor takes effect here
+
+        setParam (processor, ParamIDs::drive, 40.0f);
+        setParam (processor, ParamIDs::mix, 100.0f);
+
+        juce::AudioBuffer<float> buffer (2, 512);
+        TestHelpers::fillWithSine (buffer, 48000.0, 1000.0, 1.0f);
+
+        juce::MidiBuffer midi;
+
+        for (int i = 0; i < 8; ++i)
+            CHECK_NOTHROW (processor.processBlock (buffer, midi));
+
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+    }
+}
+
 TEST_CASE ("reset() followed by processBlock does not crash", "[robustness]")
 {
     OvertureAudioProcessor processor;

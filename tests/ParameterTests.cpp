@@ -57,32 +57,33 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
     {
         static constexpr const char* allIds[] = {
             ParamIDs::tight, ParamIDs::drive, ParamIDs::tone, ParamIDs::level, ParamIDs::mix,
+            ParamIDs::bypass, ParamIDs::voicing, ParamIDs::oversampling,
         };
 
         for (const auto* id : allIds)
             CHECK (apvts.getParameter (id) != nullptr);
     }
 
-    SECTION ("total parameter count matches the v0.1 layout")
+    SECTION ("total parameter count matches the v0.1.0 layout")
     {
-        CHECK (apvts.processor.getParameters().size() == 5);
+        CHECK (apvts.processor.getParameters().size() == 8);
     }
 
     SECTION ("Tight: high-pass pre-emphasis defaults and range")
     {
-        checkFloatDefault (apvts, ParamIDs::tight, 150.0f);
+        checkFloatDefault (apvts, ParamIDs::tight, 130.0f);
         checkFloatRange (apvts, ParamIDs::tight, 20.0f, 400.0f);
     }
 
     SECTION ("Drive: clipper input gain defaults and range")
     {
-        checkFloatDefault (apvts, ParamIDs::drive, 12.0f);
+        checkFloatDefault (apvts, ParamIDs::drive, 8.0f);
         checkFloatRange (apvts, ParamIDs::drive, 0.0f, 40.0f);
     }
 
     SECTION ("Tone: post-clip low-pass defaults and range")
     {
-        checkFloatDefault (apvts, ParamIDs::tone, 5000.0f);
+        checkFloatDefault (apvts, ParamIDs::tone, 6000.0f);
         checkFloatRange (apvts, ParamIDs::tone, 1000.0f, 8000.0f);
     }
 
@@ -97,4 +98,38 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
         checkFloatDefault (apvts, ParamIDs::mix, 100.0f);
         checkFloatRange (apvts, ParamIDs::mix, 0.0f, 100.0f);
     }
+
+    SECTION ("Bypass: defaults to off")
+    {
+        auto* param = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter (ParamIDs::bypass));
+        REQUIRE (param != nullptr);
+        CHECK (param->get() == false);
+    }
+
+    SECTION ("Voicing: three choices, defaults to Asymmetric")
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::voicing));
+        REQUIRE (param != nullptr);
+        CHECK (param->choices.size() == 3);
+        CHECK (param->getIndex() == 0);
+        CHECK (param->getCurrentChoiceName() == juce::String ("Asymmetric"));
+    }
+
+    SECTION ("Oversampling: three choices, defaults to 4x")
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::oversampling));
+        REQUIRE (param != nullptr);
+        CHECK (param->choices.size() == 3);
+        CHECK (param->getIndex() == 1);
+        CHECK (param->getCurrentChoiceName() == juce::String ("4x"));
+    }
+}
+
+TEST_CASE ("getBypassParameter() returns the host-visible Bypass parameter", "[processor][parameters][bypass]")
+{
+    OvertureAudioProcessor processor;
+
+    auto* bypassParam = processor.getBypassParameter();
+    REQUIRE (bypassParam != nullptr);
+    CHECK (bypassParam == processor.apvts.getParameter (ParamIDs::bypass));
 }
