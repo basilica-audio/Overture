@@ -9,8 +9,13 @@ namespace
     constexpr int labelHeight = 20;
     constexpr int margin = 20;
     constexpr int numKnobs = 5;
+    constexpr int choiceBoxHeight = 24;
+    constexpr int choiceRowHeight = labelHeight + choiceBoxHeight + margin / 2;
+    constexpr int bypassRowHeight = 24;
     constexpr int editorWidth = margin * 2 + numKnobs * knobSize + (numKnobs - 1) * margin;
-    constexpr int editorHeight = margin * 2 + labelHeight + knobSize + textBoxHeight;
+    constexpr int editorHeight = margin * 2 + bypassRowHeight + margin / 2
+                                  + labelHeight + knobSize + textBoxHeight + margin / 2
+                                  + choiceRowHeight;
 }
 
 OvertureAudioProcessorEditor::OvertureAudioProcessorEditor (OvertureAudioProcessor& processorToEdit)
@@ -22,6 +27,12 @@ OvertureAudioProcessorEditor::OvertureAudioProcessorEditor (OvertureAudioProcess
     configureKnob (toneKnob, ParamIDs::tone, "Tone");
     configureKnob (levelKnob, ParamIDs::level, "Level");
     configureKnob (mixKnob, ParamIDs::mix, "Mix");
+
+    configureChoice (voicingChoice, ParamIDs::voicing, "Voicing");
+    configureChoice (oversamplingChoice, ParamIDs::oversampling, "Oversampling");
+
+    addAndMakeVisible (bypassButton);
+    bypassAttachment = std::make_unique<ButtonAttachment> (audioProcessor.apvts, ParamIDs::bypass, bypassButton);
 
     setResizable (false, false);
     setSize (editorWidth, editorHeight);
@@ -46,13 +57,41 @@ void OvertureAudioProcessorEditor::configureKnob (Knob& knob, const juce::String
     knob.attachment = std::make_unique<SliderAttachment> (audioProcessor.apvts, parameterId, knob.slider);
 }
 
+void OvertureAudioProcessorEditor::configureChoice (Choice& choice, const juce::String& parameterId, const juce::String& labelText)
+{
+    addAndMakeVisible (choice.box);
+
+    choice.label.setText (labelText, juce::dontSendNotification);
+    choice.label.setJustificationType (juce::Justification::centred);
+    choice.label.attachToComponent (&choice.box, false);
+    addAndMakeVisible (choice.label);
+
+    choice.attachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, parameterId, choice.box);
+}
+
 void OvertureAudioProcessorEditor::resized()
 {
     auto bounds = getLocalBounds().reduced (margin);
-    bounds.removeFromTop (labelHeight); // room for the attached labels above each knob
 
-    const auto slotWidth = bounds.getWidth() / numKnobs;
+    auto bypassRow = bounds.removeFromTop (bypassRowHeight);
+    bypassButton.setBounds (bypassRow.removeFromLeft (100));
+
+    bounds.removeFromTop (margin / 2);
+
+    auto knobRow = bounds.removeFromTop (labelHeight + knobSize + textBoxHeight);
+    knobRow.removeFromTop (labelHeight); // room for the attached labels above each knob
+
+    const auto slotWidth = knobRow.getWidth() / numKnobs;
 
     for (auto* knob : { &tightKnob, &driveKnob, &toneKnob, &levelKnob, &mixKnob })
-        knob->slider.setBounds (bounds.removeFromLeft (slotWidth).reduced (margin / 2, 0));
+        knob->slider.setBounds (knobRow.removeFromLeft (slotWidth).reduced (margin / 2, 0));
+
+    bounds.removeFromTop (margin / 2);
+
+    auto choiceRow = bounds.removeFromTop (choiceRowHeight);
+    choiceRow.removeFromTop (labelHeight); // room for the attached labels above each combo box
+
+    const auto choiceSlotWidth = choiceRow.getWidth() / 2;
+    voicingChoice.box.setBounds (choiceRow.removeFromLeft (choiceSlotWidth).reduced (margin / 2, 0).withHeight (choiceBoxHeight));
+    oversamplingChoice.box.setBounds (choiceRow.removeFromLeft (choiceSlotWidth).reduced (margin / 2, 0).withHeight (choiceBoxHeight));
 }
