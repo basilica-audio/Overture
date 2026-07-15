@@ -38,9 +38,13 @@ public:
     // Safe to call from the audio thread (e.g. on playback stop/loop).
     void reset();
 
-    // Processes `block` in place. `block` must have at most the maximum
-    // sample/channel counts declared to prepare(); a zero-sample block is a
-    // safe no-op. No allocation occurs here.
+    // Processes `block` in place. A zero-sample block is a safe no-op. No
+    // allocation occurs here. If `block` exceeds the maximum sample count
+    // declared to prepare() (spec.maximumBlockSize), it is defensively
+    // split into chunks of at most that size before processing (issue #13)
+    // rather than assumed - the oversampler's and DryWetMixer's internal
+    // buffers are both fixed to that size and only guard the invariant
+    // with a jassert, which compiles out in Release builds.
     void process (juce::dsp::AudioBlock<float>& block);
 
     // Parameter setters, in real units (dB, Hz, 0-1 proportion). Safe to
@@ -134,6 +138,18 @@ private:
     float lastMixProportion = 1.0f;
 
     int latencySamples = 0;
+
+    // Maximum block size promised to prepare() (spec.maximumBlockSize); 0
+    // until the first prepare() call. process() uses this to defensively
+    // chunk any incoming block larger than what the oversampler's and
+    // DryWetMixer's internal buffers were actually sized for (issue #13).
+    size_t preparedMaxBlockSize = 0;
+
+    // Runs the full Tight -> Drive -> oversampled clipper -> Tone -> Level
+    // -> Mix chain in place on a single chunk of at most
+    // preparedMaxBlockSize samples. Called once per chunk by process(),
+    // which is what performs the size-based splitting.
+    void processChunk (juce::dsp::AudioBlock<float>& block);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvertureEngine)
 };

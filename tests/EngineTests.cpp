@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <memory>
 
 namespace
 {
@@ -289,4 +290,80 @@ TEST_CASE ("Engine reset() clears filter/oversampler/delay state without crashin
     TestHelpers::fillWithSine (buffer, testSampleRate, testFrequencyHz, 0.9f);
     CHECK_NOTHROW (engine.process (block));
     CHECK (TestHelpers::allSamplesFinite (buffer));
+}
+
+TEST_CASE ("Engine defensively chunks a block larger than the size declared to prepare()", "[dsp][engine][robustness]")
+{
+    // basilica-audio/Overture issue #13: prepare()/process() had no clamp
+    // against a host handing process() more samples than the
+    // spec.maximumBlockSize it declared to prepare() - the oversampler's
+    // and DryWetMixer's internal buffers are both fixed to that size and
+    // only guarded by a jassert, which compiles out in Release builds (see
+    // JUCE 8.0.14 juce_Oversampling.cpp's processSamplesUp and
+    // juce_DryWetMixer.cpp's pushDrySamples). A single oversized process()
+    // call used to hand that whole block straight to both, overrunning
+    // their internal buffers.
+    //
+    // This proves more than "doesn't crash": it proves the internal
+    // chunking added to fix #13 produces *bit-identical* output to what a
+    // well-behaved host would get by calling process() once per
+    // preparedSize-sample chunk itself - i.e. the defensive chunk boundary
+    // reproduces exactly the same per-chunk coefficient/Mix smoothing
+    // cadence a correctly-behaving host would drive.
+    constexpr int preparedSize = 128;
+    constexpr int oversizedBlockSamples = 8192; // 64x the declared block size
+
+    const auto makeConfiguredEngine = [] () -> std::unique_ptr<OvertureEngine>
+    {
+        auto engine = std::make_unique<OvertureEngine>();
+        engine->setDriveDb (20.0f);
+        engine->setTightFrequencyHz (150.0f);
+        engine->setToneFrequencyHz (4000.0f);
+        engine->setLevelDb (6.0f);
+        engine->setMixProportion (1.0f);
+
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = testSampleRate;
+        spec.maximumBlockSize = static_cast<juce::uint32> (preparedSize);
+        spec.numChannels = 2;
+        engine->prepare (spec);
+        return engine;
+    };
+
+    juce::AudioBuffer<float> input (2, oversizedBlockSamples);
+    TestHelpers::fillWithSine (input, testSampleRate, testFrequencyHz, 0.6f);
+
+    // Reference: process the exact same signal the way a well-behaved host
+    // would - one process() call per preparedSize-sample chunk.
+    const auto referenceEngine = makeConfiguredEngine();
+    juce::AudioBuffer<float> referenceOutput;
+    referenceOutput.makeCopyOf (input);
+
+    for (int offset = 0; offset < oversizedBlockSamples; offset += preparedSize)
+    {
+        const auto chunkLength = juce::jmin (preparedSize, oversizedBlockSamples - offset);
+        juce::AudioBuffer<float> chunkView (referenceOutput.getArrayOfWritePointers(), 2, offset, chunkLength);
+        juce::dsp::AudioBlock<float> chunkBlock (chunkView);
+        referenceEngine->process (chunkBlock);
+    }
+
+    // Under test: a single process() call carrying the whole oversized
+    // block at once - the exact failure mode issue #13 was filed against.
+    const auto oversizedEngine = makeConfiguredEngine();
+    juce::AudioBuffer<float> oversizedOutput;
+    oversizedOutput.makeCopyOf (input);
+
+    juce::dsp::AudioBlock<float> oversizedBlock (oversizedOutput);
+    CHECK_NOTHROW (oversizedEngine->process (oversizedBlock));
+
+    CHECK (TestHelpers::allSamplesFinite (oversizedOutput));
+
+    for (int channel = 0; channel < oversizedOutput.getNumChannels(); ++channel)
+    {
+        const auto* refData = referenceOutput.getReadPointer (channel);
+        const auto* outData = oversizedOutput.getReadPointer (channel);
+
+        for (int sample = 0; sample < oversizedBlockSamples; ++sample)
+            CHECK (outData[sample] == Catch::Approx (refData[sample]).margin (1.0e-6));
+    }
 }
