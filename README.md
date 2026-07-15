@@ -4,7 +4,7 @@
 
 *The 808 boost — tighten your low end before the gain hits.*
 
-[![CI](https://github.com/metal-up-your-ass/overture/actions/workflows/ci.yml/badge.svg)](https://github.com/metal-up-your-ass/overture/actions/workflows/ci.yml)
+[![CI](https://github.com/basilica-audio/overture/actions/workflows/ci.yml/badge.svg)](https://github.com/basilica-audio/overture/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 > **Work in progress.** Overture is pre-1.0 and under active development. There are no built binaries or releases yet — building from source is currently the only way to run it. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
