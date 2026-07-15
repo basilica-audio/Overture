@@ -11,7 +11,7 @@ Overture is a TS-808-style tight boost/overdrive for metal guitar. It is not a f
 1. Strip low end out of the signal *before* it hits any clipping/distortion, so palm mutes and low-string chugs stay tight and articulate instead of turning into a low-frequency mush once the amp's own gain stage saturates them.
 2. Add a controlled amount of its own drive/clipping character on top, voiced to push the front of an already-distorted amp rather than to be a distortion pedal in its own right.
 
-## Where it sits in a symphonic-metal chain
+## Where it sits in a heavy production chain
 
 Overture is a **pre-amp tightening/boost stage**, not a cab sim, not an EQ, not a compressor. A typical chain:
 
