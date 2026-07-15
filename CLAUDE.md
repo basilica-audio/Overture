@@ -1,6 +1,6 @@
 # Overture — tight boost / overdrive (guitar)
 
-Per-repo working memory for Claude Code sessions on this plugin. Part of the **Metal up your ass** symphonic-metal plugin suite (`github.com/metal-up-your-ass`).
+Per-repo working memory for Claude Code sessions on this plugin. Part of the **Metal up your ass** symphonic-metal plugin suite (`github.com/basilica-audio`).
 
 ## What this is
 Overture is a TS-808-style **tight boost / overdrive** for metal guitar — the pre-amp tightening stage run in front of a high-gain amp. It strips low end before the clipper (the "808 boost" trick) so palm mutes stay tight, then drives an oversampled, selectable-voicing soft/hard clipper for overdrive character. AU / VST3 / Standalone.
@@ -31,7 +31,7 @@ Release/universal + pluginval + auval run in CI, not locally.
 - **Branch:** `main` is protected — no direct commits; use a feature branch + PR, green CI required (Conventional Commits). New DSP needs tests (null/reference, NaN/Inf sweep, state round-trip, latency).
 
 ## Roadmap
-Tracked as GitHub milestones (M1 DSP & tests · M2 presets/state · M3 GUI & a11y · M4 release/signing/v1.0.0) and issues. Read them with `gh issue list` / `gh api repos/metal-up-your-ass/overture/milestones`.
+Tracked as GitHub milestones (M1 DSP & tests · M2 presets/state · M3 GUI & a11y · M4 release/signing/v1.0.0) and issues. Read them with `gh issue list` / `gh api repos/basilica-audio/overture/milestones`.
 
 ## Suite context
-Style references: sibling `metal-up-your-ass/twist-your-guts` (bass) and the other suite plugins (tenebrae, nave, silentium, requiem, seraph, aureate, firmament, triptych, apotheosis). Shared scaffold conventions come from the same template.
+Style references: sibling `basilica-audio/Crypta` (bass) and the other suite plugins (tenebrae, nave, silentium, requiem, seraph, aureate, firmament, triptych, apotheosis). Shared scaffold conventions come from the same template.
