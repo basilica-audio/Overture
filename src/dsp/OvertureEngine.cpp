@@ -1,5 +1,7 @@
 #include "OvertureEngine.h"
 
+#include "RealtimeCoefficients.h"
+
 namespace
 {
     // Keeps a requested filter frequency safely below Nyquist regardless of
@@ -184,11 +186,21 @@ void OvertureEngine::processChunk (juce::dsp::AudioBlock<float>& block)
     const auto toneHz = clampBelowNyquist (toneFrequencySmoothed.skip (static_cast<int> (numSamples)), sampleRate);
     const auto wetMix = mixSmoothed.skip (static_cast<int> (numSamples));
 
-    *tightHighPass.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass (sampleRate, tightHz, tightFilterQ);
+    // Non-allocating coefficient update (issue #12): ArrayCoefficients::
+    // makeHighPass/makeLowPass compute into a stack std::array, which
+    // applyBiquadCoefficients then writes into the already-allocated
+    // Coefficients storage primed by prepare() - no heap traffic on the
+    // audio thread, unlike the IIR::Coefficients::makeHighPass/makeLowPass
+    // this replaced (each of which `new`s a fresh ref-counted Coefficients
+    // object, including its own heap-backed Array, per call).
+    ovtr::applyBiquadCoefficients (*tightHighPass.state,
+        juce::dsp::IIR::ArrayCoefficients<float>::makeHighPass (sampleRate, tightHz, tightFilterQ));
     // Both tone sections share the same cutoff; only Q differs, per the
     // 4th-order Butterworth cascade design (see toneFilterQ1/Q2 docs).
-    *toneLowPassStage1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ1);
-    *toneLowPassStage2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ2);
+    ovtr::applyBiquadCoefficients (*toneLowPassStage1.state,
+        juce::dsp::IIR::ArrayCoefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ1));
+    ovtr::applyBiquadCoefficients (*toneLowPassStage2.state,
+        juce::dsp::IIR::ArrayCoefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ2));
     dryWetMixer.setWetMixProportion (wetMix);
 
     juce::dsp::ProcessContextReplacing<float> context (block);
