@@ -1,5 +1,7 @@
 #include "OvertureEngine.h"
 
+#include "RealtimeCoefficients.h"
+
 namespace
 {
     // Keeps a requested filter frequency safely below Nyquist regardless of
@@ -20,6 +22,7 @@ OvertureEngine::OvertureEngine() = default;
 void OvertureEngine::prepare (const juce::dsp::ProcessSpec& spec)
 {
     sampleRate = spec.sampleRate;
+    preparedMaxBlockSize = static_cast<size_t> (spec.maximumBlockSize);
 
     tightHighPass.prepare (spec);
     driveGain.setRampDurationSeconds (smoothingTimeSeconds);
@@ -147,21 +150,57 @@ void OvertureEngine::process (juce::dsp::AudioBlock<float>& block)
     if (numSamples == 0)
         return;
 
+    // Defensive chunking against a host that violates its own
+    // prepareToPlay()/processBlock() size contract (issue #13): the
+    // oversampler's and DryWetMixer's internal buffers are both fixed to
+    // preparedMaxBlockSize and only guarded by a jassert, which compiles
+    // out in Release builds (JUCE 8.0.14 juce_Oversampling.cpp's
+    // processSamplesUp/Down and juce_DryWetMixer.cpp's pushDrySamples/
+    // mixWetSamples). Splitting into chunks of at most preparedMaxBlockSize
+    // keeps every call into those internals within the size they were
+    // prepared for, in both Debug and Release, without reallocating
+    // anything here. In the overwhelmingly common case (numSamples <=
+    // preparedMaxBlockSize) this loop runs exactly once over the full
+    // block, identical to the pre-#13 behaviour.
+    const auto chunkLimit = preparedMaxBlockSize > 0 ? preparedMaxBlockSize : numSamples;
+
+    for (size_t offset = 0; offset < numSamples; offset += chunkLimit)
+    {
+        const auto chunkLength = juce::jmin (chunkLimit, numSamples - offset);
+        auto chunk = block.getSubBlock (offset, chunkLength);
+        processChunk (chunk);
+    }
+}
+
+void OvertureEngine::processChunk (juce::dsp::AudioBlock<float>& block)
+{
+    const auto numSamples = block.getNumSamples();
+
     // Coefficient recomputation involves trig calls (tan/cos), so filter
-    // frequencies are smoothed and re-derived once per block rather than
+    // frequencies are smoothed and re-derived once per chunk rather than
     // per sample - a standard real-time-safe compromise for IIR filters,
     // whose coefficients aren't cheap to interpolate directly. Drive/Level
     // still ramp sample-accurately via juce::dsp::Gain's internal
-    // SmoothedValue, and Mix is re-applied every block below.
+    // SmoothedValue, and Mix is re-applied every chunk below.
     const auto tightHz = clampBelowNyquist (tightFrequencySmoothed.skip (static_cast<int> (numSamples)), sampleRate);
     const auto toneHz = clampBelowNyquist (toneFrequencySmoothed.skip (static_cast<int> (numSamples)), sampleRate);
     const auto wetMix = mixSmoothed.skip (static_cast<int> (numSamples));
 
-    *tightHighPass.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass (sampleRate, tightHz, tightFilterQ);
+    // Non-allocating coefficient update (issue #12): ArrayCoefficients::
+    // makeHighPass/makeLowPass compute into a stack std::array, which
+    // applyBiquadCoefficients then writes into the already-allocated
+    // Coefficients storage primed by prepare() - no heap traffic on the
+    // audio thread, unlike the IIR::Coefficients::makeHighPass/makeLowPass
+    // this replaced (each of which `new`s a fresh ref-counted Coefficients
+    // object, including its own heap-backed Array, per call).
+    ovtr::applyBiquadCoefficients (*tightHighPass.state,
+        juce::dsp::IIR::ArrayCoefficients<float>::makeHighPass (sampleRate, tightHz, tightFilterQ));
     // Both tone sections share the same cutoff; only Q differs, per the
     // 4th-order Butterworth cascade design (see toneFilterQ1/Q2 docs).
-    *toneLowPassStage1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ1);
-    *toneLowPassStage2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ2);
+    ovtr::applyBiquadCoefficients (*toneLowPassStage1.state,
+        juce::dsp::IIR::ArrayCoefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ1));
+    ovtr::applyBiquadCoefficients (*toneLowPassStage2.state,
+        juce::dsp::IIR::ArrayCoefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ2));
     dryWetMixer.setWetMixProportion (wetMix);
 
     juce::dsp::ProcessContextReplacing<float> context (block);
