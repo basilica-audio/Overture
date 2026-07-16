@@ -56,7 +56,8 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
     SECTION ("all documented parameter IDs resolve")
     {
         static constexpr const char* allIds[] = {
-            ParamIDs::tight, ParamIDs::drive, ParamIDs::tone, ParamIDs::level, ParamIDs::mix,
+            ParamIDs::tight, ParamIDs::drive, ParamIDs::biteAmount, ParamIDs::kneeSoften,
+            ParamIDs::asymmetryAmount, ParamIDs::biteTilt, ParamIDs::level, ParamIDs::mix,
             ParamIDs::bypass, ParamIDs::voicing, ParamIDs::oversampling,
         };
 
@@ -64,27 +65,52 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
             CHECK (apvts.getParameter (id) != nullptr);
     }
 
-    SECTION ("total parameter count matches the v0.1.0 layout")
+    SECTION ("ParamIDs::tone is retired - not a live/registered parameter as of v0.2.0")
     {
-        CHECK (apvts.processor.getParameters().size() == 8);
+        CHECK (apvts.getParameter (ParamIDs::tone) == nullptr);
     }
 
-    SECTION ("Tight: high-pass pre-emphasis defaults and range")
+    SECTION ("total parameter count matches the v0.2.0 layout")
     {
-        checkFloatDefault (apvts, ParamIDs::tight, 130.0f);
+        // v0.1.0 had 8; v0.2.0 removes `tone` and adds `biteAmount`,
+        // `kneeSoften`, `asymmetryAmount`, `biteTilt` -> 8 - 1 + 4 = 11.
+        CHECK (apvts.processor.getParameters().size() == 11);
+    }
+
+    SECTION ("Tight: high-pass pre-emphasis defaults and range (v0.2.0: default 130 -> 100 Hz)")
+    {
+        checkFloatDefault (apvts, ParamIDs::tight, 100.0f);
         checkFloatRange (apvts, ParamIDs::tight, 20.0f, 400.0f);
     }
 
-    SECTION ("Drive: clipper input gain defaults and range")
+    SECTION ("Drive: clipper input gain defaults and range (v0.2.0: default 8 -> 3 dB)")
     {
-        checkFloatDefault (apvts, ParamIDs::drive, 8.0f);
+        checkFloatDefault (apvts, ParamIDs::drive, 3.0f);
         checkFloatRange (apvts, ParamIDs::drive, 0.0f, 40.0f);
     }
 
-    SECTION ("Tone: post-clip low-pass defaults and range")
+    SECTION ("Bite: frequency-dependent clipper gain defaults and range (new in v0.2.0)")
     {
-        checkFloatDefault (apvts, ParamIDs::tone, 6000.0f);
-        checkFloatRange (apvts, ParamIDs::tone, 1000.0f, 8000.0f);
+        checkFloatDefault (apvts, ParamIDs::biteAmount, 65.0f);
+        checkFloatRange (apvts, ParamIDs::biteAmount, 0.0f, 100.0f);
+    }
+
+    SECTION ("Knee Soften: drive-dependent knee softening defaults and range (new in v0.2.0)")
+    {
+        checkFloatDefault (apvts, ParamIDs::kneeSoften, 40.0f);
+        checkFloatRange (apvts, ParamIDs::kneeSoften, 0.0f, 100.0f);
+    }
+
+    SECTION ("Asymmetry: exposed clipper bias defaults and range (new in v0.2.0)")
+    {
+        checkFloatDefault (apvts, ParamIDs::asymmetryAmount, 40.0f);
+        checkFloatRange (apvts, ParamIDs::asymmetryAmount, 0.0f, 100.0f);
+    }
+
+    SECTION ("Bite Tilt: post-clip bidirectional tilt defaults and range (new in v0.2.0, replaces Tone)")
+    {
+        checkFloatDefault (apvts, ParamIDs::biteTilt, 0.0f);
+        checkFloatRange (apvts, ParamIDs::biteTilt, -100.0f, 100.0f);
     }
 
     SECTION ("Level: output trim defaults and range")
@@ -106,13 +132,16 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
         CHECK (param->get() == false);
     }
 
-    SECTION ("Voicing: three choices, defaults to Asymmetric")
+    SECTION ("Voicing: three choices, defaults to Asymmetric, indices frozen")
     {
         auto* param = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::voicing));
         REQUIRE (param != nullptr);
         CHECK (param->choices.size() == 3);
         CHECK (param->getIndex() == 0);
         CHECK (param->getCurrentChoiceName() == juce::String ("Asymmetric"));
+        CHECK (param->choices[0] == juce::String ("Asymmetric"));
+        CHECK (param->choices[1] == juce::String ("Soft Symmetric"));
+        CHECK (param->choices[2] == juce::String ("Hard Clip"));
     }
 
     SECTION ("Oversampling: three choices, defaults to 4x")

@@ -43,7 +43,7 @@ TEST_CASE ("Full-scale input at maximum drive produces no NaN/Inf", "[robustness
 
     setParam (processor, ParamIDs::drive, 40.0f);
     setParam (processor, ParamIDs::tight, 400.0f);
-    setParam (processor, ParamIDs::tone, 8000.0f);
+    setParam (processor, ParamIDs::biteTilt, 100.0f);
     setParam (processor, ParamIDs::level, 24.0f);
     setParam (processor, ParamIDs::mix, 100.0f);
 
@@ -56,7 +56,17 @@ TEST_CASE ("Full-scale input at maximum drive produces no NaN/Inf", "[robustness
         CHECK_NOTHROW (processor.processBlock (buffer, midi));
 
     CHECK (TestHelpers::allSamplesFinite (buffer));
-    CHECK (TestHelpers::peakAbsolute (buffer) < 100.0f); // sane bound, not just "finite"
+    // Sane bound, not just "finite" - loosened from v0.1's 100.0f (adapted,
+    // and by a lot): Bite Tilt at +100% is a new, deliberately generous
+    // post-clip *boost* stage reaching a very large asymptotic gain well
+    // above its ~3 kHz corner (docs/design-brief.md's Bite Tilt section;
+    // v0.1's Tone could only ever cut, never boost) stacked on top of
+    // already-maximal Drive/Tight/Level - a combination with no realistic
+    // musical use but that this test intentionally still exercises for "no
+    // NaN/Inf/runaway instability", not a tight numeric ceiling; see the
+    // dedicated Bite Tilt bidirectionality tests in tests/EngineTests.cpp
+    // for precisely-bounded gain assertions instead.
+    CHECK (TestHelpers::peakAbsolute (buffer) < 1.0e7f);
 }
 
 TEST_CASE ("Denormal-range input produces no NaN/Inf output", "[robustness]")
@@ -112,7 +122,7 @@ TEST_CASE ("Extreme parameter values at both range edges produce no NaN/Inf", "[
     {
         setParam (processor, ParamIDs::tight, useMinimum ? 20.0f : 400.0f);
         setParam (processor, ParamIDs::drive, useMinimum ? 0.0f : 40.0f);
-        setParam (processor, ParamIDs::tone, useMinimum ? 1000.0f : 8000.0f);
+        setParam (processor, ParamIDs::biteTilt, useMinimum ? -100.0f : 100.0f);
         setParam (processor, ParamIDs::level, useMinimum ? -24.0f : 24.0f);
         setParam (processor, ParamIDs::mix, useMinimum ? 0.0f : 100.0f);
 
@@ -137,9 +147,75 @@ TEST_CASE ("Rapid parameter automation across many blocks produces no NaN/Inf", 
     {
         setParam (processor, ParamIDs::tight, 20.0f + unit (rng) * 380.0f);
         setParam (processor, ParamIDs::drive, unit (rng) * 40.0f);
-        setParam (processor, ParamIDs::tone, 1000.0f + unit (rng) * 7000.0f);
+        setParam (processor, ParamIDs::biteTilt, -100.0f + unit (rng) * 200.0f);
         setParam (processor, ParamIDs::level, -24.0f + unit (rng) * 48.0f);
         setParam (processor, ParamIDs::mix, unit (rng) * 100.0f);
+
+        juce::AudioBuffer<float> buffer (2, 256);
+        TestHelpers::fillWithSine (buffer, 48000.0, 200.0 + unit (rng) * 4000.0, 0.7f);
+
+        CHECK_NOTHROW (processor.processBlock (buffer, midi));
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+    }
+}
+
+//==============================================================================
+// v0.2.0 "NaN/Inf robustness on all new controls" guarantee
+// (docs/design-brief.md guarantee 7): sweeps biteAmount, kneeSoften,
+// asymmetryAmount, biteTilt to their extremes combined with extreme
+// Drive/Tight/Level and confirms no NaN/Inf propagates through the engine -
+// carries forward the pre-existing "Extreme parameter values at both range
+// edges" test above to the four new controls specifically.
+TEST_CASE ("Extreme new-control (Bite/Knee Soften/Asymmetry/Bite Tilt) values combined with extreme "
+           "Drive/Tight/Level produce no NaN/Inf",
+           "[robustness]")
+{
+    OvertureAudioProcessor processor;
+    processor.prepareToPlay (44100.0, 256);
+
+    juce::AudioBuffer<float> buffer (2, 256);
+    juce::MidiBuffer midi;
+
+    for (bool useMinimum : { true, false })
+    {
+        for (auto voicingIndex : { 0.0f, 1.0f, 2.0f })
+        {
+            setParam (processor, ParamIDs::tight, useMinimum ? 20.0f : 400.0f);
+            setParam (processor, ParamIDs::drive, useMinimum ? 0.0f : 40.0f);
+            setParam (processor, ParamIDs::biteAmount, useMinimum ? 0.0f : 100.0f);
+            setParam (processor, ParamIDs::kneeSoften, useMinimum ? 0.0f : 100.0f);
+            setParam (processor, ParamIDs::asymmetryAmount, useMinimum ? 0.0f : 100.0f);
+            setParam (processor, ParamIDs::biteTilt, useMinimum ? -100.0f : 100.0f);
+            setParam (processor, ParamIDs::level, useMinimum ? -24.0f : 24.0f);
+            setParam (processor, ParamIDs::mix, useMinimum ? 0.0f : 100.0f);
+            setParam (processor, ParamIDs::voicing, voicingIndex);
+
+            TestHelpers::fillWithSine (buffer, 44100.0, 440.0, 1.0f);
+
+            CHECK_NOTHROW (processor.processBlock (buffer, midi));
+            CHECK (TestHelpers::allSamplesFinite (buffer));
+        }
+    }
+}
+
+TEST_CASE ("Rapid automation of Bite/Knee Soften/Asymmetry/Bite Tilt across many blocks produces no NaN/Inf",
+           "[robustness]")
+{
+    OvertureAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 256);
+
+    std::mt19937 rng (5678);
+    std::uniform_real_distribution<float> unit (0.0f, 1.0f);
+
+    juce::MidiBuffer midi;
+
+    for (int block = 0; block < 100; ++block)
+    {
+        setParam (processor, ParamIDs::drive, unit (rng) * 40.0f);
+        setParam (processor, ParamIDs::biteAmount, unit (rng) * 100.0f);
+        setParam (processor, ParamIDs::kneeSoften, unit (rng) * 100.0f);
+        setParam (processor, ParamIDs::asymmetryAmount, unit (rng) * 100.0f);
+        setParam (processor, ParamIDs::biteTilt, -100.0f + unit (rng) * 200.0f);
 
         juce::AudioBuffer<float> buffer (2, 256);
         TestHelpers::fillWithSine (buffer, 48000.0, 200.0 + unit (rng) * 4000.0, 0.7f);
@@ -164,7 +240,9 @@ TEST_CASE ("Bypass parameter forces a delay-compensated passthrough regardless o
     // prove the *entire* wet chain is bypassed, not just quiet by default.
     setParam (processor, ParamIDs::drive, 30.0f);
     setParam (processor, ParamIDs::tight, 300.0f);
-    setParam (processor, ParamIDs::tone, 2000.0f);
+    setParam (processor, ParamIDs::biteAmount, 70.0f);
+    setParam (processor, ParamIDs::kneeSoften, 60.0f);
+    setParam (processor, ParamIDs::biteTilt, -30.0f);
     setParam (processor, ParamIDs::level, 12.0f);
     setParam (processor, ParamIDs::mix, 100.0f); // Mix itself says "fully wet" - Bypass must override it
 

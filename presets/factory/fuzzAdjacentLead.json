@@ -1,0 +1,17 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.overture",
+    "pluginVersion": "0.2.0",
+    "name": "Fuzz-Adjacent Lead",
+    "category": "Guitar",
+    "parameters": {
+        "tight": 150.0,
+        "drive": 30.0,
+        "voicing": 2,
+        "biteAmount": 25.0,
+        "kneeSoften": 70.0,
+        "biteTilt": 25.0,
+        "level": 3.0,
+        "mix": 100.0
+    }
+}

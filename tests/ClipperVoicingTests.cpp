@@ -1,4 +1,5 @@
 #include "dsp/ClipperVoicing.h"
+#include "dsp/KneeSoftening.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -102,4 +103,105 @@ TEST_CASE ("ClipperVoicings: the three voicings give audibly different output fo
     CHECK (asym != Catch::Approx (soft).margin (1.0e-3));
     CHECK (asym != Catch::Approx (hard).margin (1.0e-3));
     CHECK (soft != Catch::Approx (hard).margin (1.0e-3));
+}
+
+//==============================================================================
+// v0.2.0 "asymmetry_amount" guarantee (docs/design-brief.md guarantee 4):
+// asymmetryAmount (0-100%) maps monotonically to the Asymmetric voicing's
+// bias `a` in 0.0-0.5 (OvertureEngine::processChunk()'s
+// `asymmetryA = (asymmetryAmountPercent * 0.01f) * asymmetryMaxBias`
+// formula, mirrored directly here since the mapping itself lives in the
+// engine, not in this header). At the default 40% (a=0.2), this must
+// reproduce v0.1's fixed a=0.2 behaviour exactly - this is the same
+// asymmetry value tests/AsymSoftClipperTests.cpp's existing suite already
+// exercises throughout, so this file only adds the sweep/monotonicity
+// coverage that is genuinely new in v0.2.0.
+namespace
+{
+    constexpr float asymmetryMaxBias = 0.5f; // mirrors OvertureEngine.h's private constant
+
+    float mapAsymmetryAmountPercentToBias (float asymmetryAmountPercent)
+    {
+        return (asymmetryAmountPercent * 0.01f) * asymmetryMaxBias;
+    }
+}
+
+TEST_CASE ("Asymmetry: default 40% maps to bias a=0.2, reproducing v0.1's fixed default exactly", "[dsp][clipper][asymmetry]")
+{
+    CHECK (mapAsymmetryAmountPercentToBias (40.0f) == Catch::Approx (0.2f).margin (1.0e-6));
+}
+
+TEST_CASE ("Asymmetry: 0% -> 100% maps monotonically to bias 0.0 -> 0.5, and positive/negative peak "
+           "levels diverge monotonically with the control",
+           "[dsp][clipper][asymmetry]")
+{
+    float previousBias = -1.0f;
+    float previousPeakSpread = -1.0f;
+
+    for (int i = 0; i <= 10; ++i)
+    {
+        const auto asymmetryAmountPercent = static_cast<float> (i) * 10.0f;
+        const auto bias = mapAsymmetryAmountPercentToBias (asymmetryAmountPercent);
+
+        CHECK (bias >= previousBias);
+        CHECK (bias <= 0.5f + 1.0e-6f);
+        previousBias = bias;
+
+        // Deep into saturation, the positive/negative half-cycle ceilings'
+        // magnitude difference is the direct, audible consequence of the
+        // bias - see AsymSoftClipperTests.cpp's "saturate at different
+        // ceilings" test for the underlying mechanism.
+        const auto positiveCeiling = AsymSoftClipper::processSample (50.0f, bias);
+        const auto negativeCeiling = AsymSoftClipper::processSample (-50.0f, bias);
+        const auto peakSpread = std::abs (std::abs (positiveCeiling) - std::abs (negativeCeiling));
+
+        CHECK (peakSpread >= previousPeakSpread - 1.0e-6f); // monotonically non-decreasing
+        previousPeakSpread = peakSpread;
+    }
+
+    // 0% (fully symmetric) and 100% (maximally asymmetric) must genuinely
+    // differ - otherwise the control would have no audible effect at all.
+    CHECK (previousPeakSpread > 0.01f);
+}
+
+//==============================================================================
+// v0.2.0 backward-compatibility guarantee (docs/design-brief.md guarantee 1):
+// at kneeSoften = 0 (OvertureEngine::processChunk() skips calling
+// KneeSoftening::apply entirely in that case rather than calling it with a
+// blend of 0 - see that function's dispatch), the per-sample computation the
+// engine performs is exactly ClipperVoicings::processSample(x, voicing, a) -
+// bit-for-bit identical to v0.1's dispatch, for all three voicings, at
+// every asymmetry bias tested (asymmetryAmount = 40% -> a = 0.2 is v0.1's
+// exact fixed default - see the Asymmetry tests above). This test exercises
+// that exact composition (voicing dispatch, conditionally-skipped knee
+// blend) directly rather than through the full engine, so it stays focused
+// on the DSP-primitive-level "transfer function" the brief's guarantee 1
+// describes; tests/EngineTests.cpp separately covers the surrounding
+// Tight/Drive/oversampling/Bite-shelf-skip machinery this composition sits
+// inside.
+namespace
+{
+    float composedClipperStage (float x, ClipperVoicing voicing, float asymmetry, float kneeBlend01)
+    {
+        const auto raw = ClipperVoicings::processSample (x, voicing, asymmetry);
+        return kneeBlend01 > 0.0f ? KneeSoftening::apply (raw, kneeBlend01) : raw;
+    }
+}
+
+TEST_CASE ("v0.2.0 backward compatibility: kneeSoften=0 reproduces v0.1's exact clipper dispatch, "
+           "bit-for-bit, for all three voicings",
+           "[dsp][clipper][backcompat]")
+{
+    constexpr float v01Asymmetry = 0.2f; // v0.1's fixed constant, == asymmetryAmount 40% mapped
+
+    for (auto voicing : { ClipperVoicing::asymmetric, ClipperVoicing::softSymmetric, ClipperVoicing::hardClip })
+    {
+        for (float x : { -3.0f, -1.5f, -0.5f, -0.05f, 0.0f, 0.05f, 0.5f, 1.5f, 3.0f })
+        {
+            const auto expected = ClipperVoicings::processSample (x, voicing, v01Asymmetry);
+            const auto actual = composedClipperStage (x, voicing, v01Asymmetry, 0.0f /* kneeSoften=0 */);
+
+            CHECK (actual == Catch::Approx (expected).margin (0.0)); // exact, not Approx-with-tolerance - bit-for-bit
+        }
+    }
 }

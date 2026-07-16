@@ -1,0 +1,18 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.overture",
+    "pluginVersion": "0.2.0",
+    "name": "Clean Push",
+    "category": "Guitar",
+    "parameters": {
+        "tight": 100.0,
+        "drive": 1.0,
+        "voicing": 0,
+        "biteAmount": 65.0,
+        "kneeSoften": 40.0,
+        "asymmetryAmount": 40.0,
+        "biteTilt": 0.0,
+        "level": 0.0,
+        "mix": 100.0
+    }
+}

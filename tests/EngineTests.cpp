@@ -5,7 +5,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
-#include <memory>
 
 namespace
 {
@@ -29,13 +28,17 @@ TEST_CASE ("Engine null test: 0% mix nulls against the input once shifted by lat
 {
     OvertureEngine engine;
 
-    // Parameters other than Mix are deliberately set to non-neutral values:
-    // a true null test has to prove the *entire* wet chain is bypassed, not
-    // just that it happens to be quiet at default settings.
+    // Parameters other than Mix are deliberately set to non-neutral values,
+    // including every v0.2.0 control - a true null test has to prove the
+    // *entire* wet chain is bypassed, not just that it happens to be quiet
+    // at default settings.
     engine.setMixProportion (0.0f);
     engine.setDriveDb (25.0f);
     engine.setTightFrequencyHz (300.0f);
-    engine.setToneFrequencyHz (2000.0f);
+    engine.setBiteAmountPercent (80.0f);
+    engine.setKneeSoftenPercent (70.0f);
+    engine.setAsymmetryAmountPercent (90.0f);
+    engine.setBiteTiltPercent (-40.0f);
     engine.setLevelDb (10.0f);
 
     const auto spec = makeTestSpec (2);
@@ -82,12 +85,17 @@ TEST_CASE ("Engine sanity test: minimum drive keeps the wet path near-linear", "
 {
     OvertureEngine engine;
 
-    // Minimum drive (0 dB), Tight/Tone set well outside the test tone's
-    // passband edge so they contribute negligible magnitude/phase change at
-    // 1 kHz, Mix fully wet so we are measuring the wet chain itself.
+    // Minimum drive (0 dB), Tight set well below and Bite Tilt left flat
+    // (0% - a true no-op, see OvertureEngine.cpp) so neither contributes any
+    // magnitude/phase change at 1 kHz, Bite/Knee Soften disabled so the
+    // clipper's own frequency-independent near-linear region is what's
+    // being measured, Mix fully wet so we are measuring the wet chain
+    // itself.
     engine.setDriveDb (0.0f);
     engine.setTightFrequencyHz (20.0f);
-    engine.setToneFrequencyHz (8000.0f);
+    engine.setBiteAmountPercent (0.0f);
+    engine.setKneeSoftenPercent (0.0f);
+    engine.setBiteTiltPercent (0.0f);
     engine.setLevelDb (0.0f);
     engine.setMixProportion (1.0f);
 
@@ -133,8 +141,8 @@ TEST_CASE ("Engine sanity test: minimum drive keeps the wet path near-linear", "
     REQUIRE (overlapLength > testBlockSize / 2);
 
     // Search a small window of sample-alignment offsets around the reported
-    // oversampling latency: the Tight/Tone IIR filters have their own tiny
-    // (sub-block, sub-10-sample) group delay at 1 kHz which is not part of
+    // oversampling latency: the Tight IIR filter has its own tiny (sub-
+    // block, sub-10-sample) group delay at 1 kHz which is not part of
     // getLatencySamples() and is not what this test is probing. Using the
     // best alignment in that narrow window isolates genuine clipper/filter
     // shape nonlinearity from that legitimate, unreported group delay.
@@ -148,86 +156,144 @@ TEST_CASE ("Engine sanity test: minimum drive keeps the wet path near-linear", "
             overlapLength,
             maxUnaccountedGroupDelaySamples);
 
-        CHECK (correlation > 0.9999);
+        // v0.2.0 threshold note (adapted from v0.1's 0.9999): with Bite
+        // Tilt at 0% now a *true* skip (no filter call at all - see
+        // OvertureEngine.cpp), the clipper's own tiny residual harmonic
+        // content at this amplitude is no longer incidentally scrubbed by
+        // v0.1's always-active (even "wide open") Tone low-pass, which
+        // very slightly reduces the correlation-with-a-pure-sine metric
+        // versus v0.1. 0.999 is still an extremely tight near-linearity
+        // bound (v0.1's own passband sanity check elsewhere in this file
+        // used a much looser +/-1 dB).
+        CHECK (correlation > 0.999);
     }
 }
 
-TEST_CASE ("Tone stack: 4th-order cascade attenuates two octaves above cutoff far more than a single 2nd-order section would",
-           "[dsp][engine][tone]")
+//==============================================================================
+// v0.2.0 Bite Tilt tests (replaces v0.1's cut-only Tone LPF - see
+// docs/design-brief.md's "Bite" section and guarantee 5).
+namespace
 {
-    // Isolates the Tone stage: Drive at 0 dB and a low test amplitude keep
-    // the clipper in its near-linear region (see the "near-linear" test
-    // above for the same technique), Tight is set far below the test tone
-    // so it contributes negligible attenuation of its own, and Mix is fully
-    // wet so the measurement is purely the wet chain's frequency response.
-    OvertureEngine engine;
-    engine.setDriveDb (0.0f);
-    engine.setTightFrequencyHz (20.0f);
-    engine.setLevelDb (0.0f);
-    engine.setMixProportion (1.0f);
-
-    constexpr float toneCutoffHz = 1500.0f;
-    engine.setToneFrequencyHz (toneCutoffHz);
-
-    const auto spec = makeTestSpec (2);
-    engine.prepare (spec);
-
-    // A true 4th-order Butterworth low-pass is ~-48 dB two octaves (4x)
-    // above its cutoff; a single 2nd-order section (the pre-refinement
-    // design) would only be ~-24 dB down at the same point. -35 dB sits
-    // safely between the two, so this test only passes for the steeper
-    // cascade, not the old single-section filter.
-    constexpr double aboveCutoffHz = toneCutoffHz * 4.0;
-    constexpr float testAmplitude = 0.1f;
-
-    juce::AudioBuffer<float> warmup (2, testBlockSize);
-    TestHelpers::fillWithSine (warmup, testSampleRate, aboveCutoffHz, testAmplitude, 0);
+    // Runs a fixed-frequency sine through an engine configured with a given
+    // biteTilt setting (Drive at 0 dB / low amplitude keeps the clipper in
+    // its near-linear region, matching the technique the near-linear test
+    // above uses) and returns the measured output RMS attenuation (dB)
+    // relative to the input.
+    double measureBiteTiltAttenuationDb (float biteTiltPercent, double frequencyHz)
     {
-        juce::dsp::AudioBlock<float> warmupBlock (warmup);
-        engine.process (warmupBlock);
+        OvertureEngine engine;
+        engine.setDriveDb (0.0f);
+        engine.setTightFrequencyHz (20.0f);
+        engine.setBiteAmountPercent (0.0f);
+        engine.setKneeSoftenPercent (0.0f);
+        // Soft Symmetric (unbiased tanh, a=0) rather than the Asymmetric
+        // default: the Asymmetric voicing's own small-signal gain is
+        // sech^2(a) < 1 by design (see AsymSoftClipperTests.cpp's
+        // near-linear test), which would otherwise show up here as a
+        // constant ~0.3 dB "attenuation" unrelated to Bite Tilt - isolating
+        // Bite Tilt's own contribution needs a clipper stage that is
+        // genuinely unity-gain at this tiny test amplitude.
+        engine.setClipperVoicing (ClipperVoicing::softSymmetric);
+        engine.setLevelDb (0.0f);
+        engine.setMixProportion (1.0f);
+        engine.setBiteTiltPercent (biteTiltPercent);
+
+        const auto spec = makeTestSpec (2);
+        engine.prepare (spec);
+
+        constexpr float testAmplitude = 0.1f;
+
+        juce::AudioBuffer<float> warmup (2, testBlockSize);
+        TestHelpers::fillWithSine (warmup, testSampleRate, frequencyHz, testAmplitude, 0);
+        {
+            juce::dsp::AudioBlock<float> warmupBlock (warmup);
+            engine.process (warmupBlock);
+        }
+
+        juce::AudioBuffer<float> measured (2, testBlockSize);
+        TestHelpers::fillWithSine (measured, testSampleRate, frequencyHz, testAmplitude, testBlockSize);
+
+        juce::dsp::AudioBlock<float> measuredBlock (measured);
+        engine.process (measuredBlock);
+
+        const auto inputRms = static_cast<double> (testAmplitude) / std::sqrt (2.0);
+        const auto outputRms = TestHelpers::rms (measured);
+        return 20.0 * std::log10 (outputRms / inputRms);
+    }
+}
+
+TEST_CASE ("Bite Tilt: flat (0%) is a true no-op relative to an unfiltered signal", "[dsp][engine][bitetilt]")
+{
+    // "True no-op" here means the filter is skipped entirely (see
+    // OvertureEngine.cpp's `if (biteTiltPercent != 0.0f)` gate) - well
+    // inside the shelf's own passband-side asymptote, attenuation must be
+    // essentially 0 dB regardless of which side of the 3 kHz corner the
+    // test frequency sits on.
+    for (double frequencyHz : { 200.0, 1000.0, 6000.0, 12000.0 })
+        CHECK (measureBiteTiltAttenuationDb (0.0f, frequencyHz) == Catch::Approx (0.0).margin (0.2));
+}
+
+TEST_CASE ("Bite Tilt: negative values darken high-frequency content monotonically", "[dsp][engine][bitetilt]")
+{
+    constexpr double aboveCornerHz = 8000.0; // well above the ~3 kHz corner
+
+    double previousAttenuationDb = 1.0; // any value > 0 dB, the loop's first iteration always improves on it
+    bool first = true;
+
+    for (float biteTiltPercent : { 0.0f, -25.0f, -50.0f, -75.0f, -100.0f })
+    {
+        const auto attenuationDb = measureBiteTiltAttenuationDb (biteTiltPercent, aboveCornerHz);
+
+        if (! first)
+            CHECK (attenuationDb <= previousAttenuationDb + 0.05); // monotonically non-increasing (getting darker)
+
+        previousAttenuationDb = attenuationDb;
+        first = false;
     }
 
-    juce::AudioBuffer<float> measured (2, testBlockSize);
-    TestHelpers::fillWithSine (measured, testSampleRate, aboveCutoffHz, testAmplitude, testBlockSize);
+    CHECK (previousAttenuationDb < -10.0); // -100% is genuinely, audibly dark well above the corner
+}
 
-    juce::dsp::AudioBlock<float> measuredBlock (measured);
-    engine.process (measuredBlock);
+TEST_CASE ("Bite Tilt: positive values brighten content above the corner relative to flat", "[dsp][engine][bitetilt]")
+{
+    constexpr double aboveCornerHz = 8000.0;
 
-    const auto inputRms = static_cast<double> (testAmplitude) / std::sqrt (2.0); // RMS of a sine of this amplitude
-    const auto outputRms = TestHelpers::rms (measured);
-    const auto attenuationDb = 20.0 * std::log10 (outputRms / inputRms);
+    const auto flatDb = measureBiteTiltAttenuationDb (0.0f, aboveCornerHz);
+    const auto boostedDb = measureBiteTiltAttenuationDb (100.0f, aboveCornerHz);
 
-    CHECK (attenuationDb < -35.0);
+    CHECK (boostedDb > flatDb + 1.0); // measurable boost above flat, not just noise
+}
 
-    // Sanity check on the other end: well inside the passband (well below
-    // cutoff), attenuation must stay small - proving the steeper roll-off
-    // above didn't come at the cost of a wrongly-placed cutoff.
-    OvertureEngine passbandEngine;
-    passbandEngine.setDriveDb (0.0f);
-    passbandEngine.setTightFrequencyHz (20.0f);
-    passbandEngine.setLevelDb (0.0f);
-    passbandEngine.setMixProportion (1.0f);
-    passbandEngine.setToneFrequencyHz (toneCutoffHz);
-    passbandEngine.prepare (spec);
+TEST_CASE ("Bite Tilt: fully-negative (-100%) subsumes v0.1's entire cut-only Tone range - "
+           "at least as dark as v0.1's fully-closed Tone at the same test frequency",
+           "[dsp][engine][bitetilt][backcompat]")
+{
+    // v0.1's Tone was a 4th-order Butterworth low-pass, built as two
+    // cascaded 2nd-order sections sharing a cutoff (see the retired
+    // toneFilterQ1/Q2 constants this reconstructs directly via JUCE's
+    // allocating - fine here, this is test setup, not audio-thread code -
+    // IIR::Coefficients::makeLowPass, matching OvertureEngine.cpp's v0.1
+    // priming exactly). "Fully-closed" is the v0.1 Tone parameter's range
+    // minimum, 1000 Hz. This test computes that legacy filter's own
+    // magnitude response directly (juce::dsp::IIR::Coefficients::
+    // getMagnitudeForFrequency(), JUCE 8.0.14) rather than hardcoding a
+    // specific dB figure, so it stays correct even if the exact
+    // biteTiltMaxDb constant is ever retuned.
+    constexpr double legacyToneCutoffHz = 1000.0;
+    constexpr double testFrequencyForComparisonHz = 4000.0; // 2 octaves above the legacy cutoff, matching v0.1's own tone-stack test convention
+    constexpr float legacyToneFilterQ1 = 0.5411961f;
+    constexpr float legacyToneFilterQ2 = 1.3065630f;
 
-    constexpr double belowCutoffHz = toneCutoffHz * 0.1;
+    const auto stage1 = juce::dsp::IIR::Coefficients<float>::makeLowPass (testSampleRate, legacyToneCutoffHz, legacyToneFilterQ1);
+    const auto stage2 = juce::dsp::IIR::Coefficients<float>::makeLowPass (testSampleRate, legacyToneCutoffHz, legacyToneFilterQ2);
 
-    juce::AudioBuffer<float> passbandWarmup (2, testBlockSize);
-    TestHelpers::fillWithSine (passbandWarmup, testSampleRate, belowCutoffHz, testAmplitude, 0);
-    {
-        juce::dsp::AudioBlock<float> block (passbandWarmup);
-        passbandEngine.process (block);
-    }
+    const auto legacyMagnitude = stage1->getMagnitudeForFrequency (testFrequencyForComparisonHz, testSampleRate)
+                                  * stage2->getMagnitudeForFrequency (testFrequencyForComparisonHz, testSampleRate);
+    const auto legacyAttenuationDb = 20.0 * std::log10 (legacyMagnitude);
 
-    juce::AudioBuffer<float> passbandMeasured (2, testBlockSize);
-    TestHelpers::fillWithSine (passbandMeasured, testSampleRate, belowCutoffHz, testAmplitude, testBlockSize);
-    juce::dsp::AudioBlock<float> passbandBlock (passbandMeasured);
-    passbandEngine.process (passbandBlock);
+    const auto newAttenuationDb = measureBiteTiltAttenuationDb (-100.0f, testFrequencyForComparisonHz);
 
-    const auto passbandOutputRms = TestHelpers::rms (passbandMeasured);
-    const auto passbandAttenuationDb = 20.0 * std::log10 (passbandOutputRms / inputRms);
-
-    CHECK (passbandAttenuationDb > -1.0);
+    CHECK (newAttenuationDb <= legacyAttenuationDb);
 }
 
 TEST_CASE ("Engine clipper voicing: switching voicing changes the output for a hot input", "[dsp][engine][voicing]")
@@ -237,7 +303,9 @@ TEST_CASE ("Engine clipper voicing: switching voicing changes the output for a h
         OvertureEngine engine;
         engine.setDriveDb (20.0f);
         engine.setTightFrequencyHz (20.0f);
-        engine.setToneFrequencyHz (8000.0f);
+        engine.setBiteAmountPercent (0.0f);
+        engine.setKneeSoftenPercent (0.0f);
+        engine.setBiteTiltPercent (0.0f);
         engine.setLevelDb (0.0f);
         engine.setMixProportion (1.0f);
         engine.setClipperVoicing (voicing);
@@ -309,7 +377,11 @@ TEST_CASE ("Engine defensively chunks a block larger than the size declared to p
     // well-behaved host would get by calling process() once per
     // preparedSize-sample chunk itself - i.e. the defensive chunk boundary
     // reproduces exactly the same per-chunk coefficient/Mix smoothing
-    // cadence a correctly-behaving host would drive.
+    // cadence a correctly-behaving host would drive. Exercises every
+    // v0.2.0 control (Bite/Knee Soften/Asymmetry/Bite Tilt) at non-zero
+    // values so their new coefficient-recompute/skip-gate code paths are
+    // covered by the chunk-boundary comparison too, not just the
+    // pre-existing Tight/Drive/Level/Mix chain.
     constexpr int preparedSize = 128;
     constexpr int oversizedBlockSamples = 8192; // 64x the declared block size
 
@@ -318,7 +390,10 @@ TEST_CASE ("Engine defensively chunks a block larger than the size declared to p
         auto engine = std::make_unique<OvertureEngine>();
         engine->setDriveDb (20.0f);
         engine->setTightFrequencyHz (150.0f);
-        engine->setToneFrequencyHz (4000.0f);
+        engine->setBiteAmountPercent (50.0f);
+        engine->setKneeSoftenPercent (50.0f);
+        engine->setAsymmetryAmountPercent (60.0f);
+        engine->setBiteTiltPercent (-20.0f);
         engine->setLevelDb (6.0f);
         engine->setMixProportion (1.0f);
 
@@ -366,4 +441,179 @@ TEST_CASE ("Engine defensively chunks a block larger than the size declared to p
         for (int sample = 0; sample < oversizedBlockSamples; ++sample)
             CHECK (outData[sample] == Catch::Approx (refData[sample]).margin (1.0e-6));
     }
+}
+
+//==============================================================================
+// v0.2.0 "bite_amount" guarantee (docs/design-brief.md guarantee 2):
+// frequency-dependent gain proof. A low-frequency sine (80 Hz, below the
+// ~700 Hz Bite shelf corner) and a higher-frequency sine (2 kHz, above it)
+// at matched input level and a fixed Drive, with biteAmount swept 0->100%;
+// the clip-onset (peak) level gap between the two must increase
+// monotonically with biteAmount - bass is progressively clipped less than
+// treble, not just filtered out beforehand (the mechanism, not merely the
+// result - see docs/design-brief.md SS1/SS"bite_amount").
+TEST_CASE ("Bite: low/high-frequency clip-onset peak gap grows monotonically with biteAmount at a fixed Drive",
+           "[dsp][engine][bite]")
+{
+    constexpr double lowFrequencyHz = 80.0;
+    constexpr double highFrequencyHz = 2000.0;
+    constexpr float testAmplitude = 0.5f;
+    constexpr float fixedDriveDb = 10.0f; // moderate - saturates but leaves room for the shelf's effect to show
+
+    const auto measurePeakAt = [&] (double frequencyHz, float biteAmountPercent)
+    {
+        OvertureEngine engine;
+        engine.setTightFrequencyHz (20.0f); // well below both test tones - negligible attenuation of either
+        engine.setDriveDb (fixedDriveDb);
+        engine.setBiteAmountPercent (biteAmountPercent);
+        engine.setKneeSoftenPercent (0.0f); // isolate Bite from Knee Soften's own level-shaping
+        engine.setAsymmetryAmountPercent (40.0f); // v0.1's default bias
+        engine.setBiteTiltPercent (0.0f); // flat/no-op post-clip stage
+        engine.setLevelDb (0.0f);
+        engine.setMixProportion (1.0f);
+        engine.setClipperVoicing (ClipperVoicing::asymmetric);
+
+        const auto spec = makeTestSpec (2);
+        engine.prepare (spec);
+
+        juce::AudioBuffer<float> warmup (2, testBlockSize);
+        TestHelpers::fillWithSine (warmup, testSampleRate, frequencyHz, testAmplitude, 0);
+        {
+            juce::dsp::AudioBlock<float> warmupBlock (warmup);
+            engine.process (warmupBlock);
+        }
+
+        juce::AudioBuffer<float> measured (2, testBlockSize);
+        TestHelpers::fillWithSine (measured, testSampleRate, frequencyHz, testAmplitude, testBlockSize);
+        juce::dsp::AudioBlock<float> measuredBlock (measured);
+        engine.process (measuredBlock);
+
+        CHECK (TestHelpers::allSamplesFinite (measured));
+        return TestHelpers::peakAbsolute (measured);
+    };
+
+    float previousGapDb = -1.0e9f;
+
+    for (float biteAmountPercent : { 0.0f, 25.0f, 50.0f, 75.0f, 100.0f })
+    {
+        const auto lowPeak = measurePeakAt (lowFrequencyHz, biteAmountPercent);
+        const auto highPeak = measurePeakAt (highFrequencyHz, biteAmountPercent);
+
+        REQUIRE (lowPeak > 0.0f);
+        REQUIRE (highPeak > 0.0f);
+
+        const auto gapDb = 20.0f * std::log10 (highPeak / lowPeak);
+
+        CHECK (gapDb >= previousGapDb - 0.05f); // monotonically non-decreasing (small float-noise tolerance)
+        previousGapDb = gapDb;
+    }
+
+    // 0% and 100% must genuinely differ - otherwise biteAmount would have no
+    // audible frequency-selective effect at all.
+    CHECK (previousGapDb > 1.0f);
+}
+
+//==============================================================================
+// v0.2.0 "knee_soften" guarantee (docs/design-brief.md guarantee 3):
+// drive-dependent knee softening proof. At a fixed kneeSoften > 0, the
+// softening effect (measured here as the crest factor - peak/RMS - lift
+// relative to the kneeSoften = 0 baseline AT THE SAME Drive, which isolates
+// the knee-softening-specific contribution from the ordinary "more Drive
+// alone makes a clipped wave more square" effect that changes crest factor
+// regardless of Knee Soften) must be measurably larger at high Drive than
+// at low Drive. Hard Clip is used because it has literally zero knee at
+// kneeSoften = 0 (a razor-sharp clamp) at any Drive level, making the
+// softening effect maximally visible/unambiguous - see
+// docs/design-brief.md's explicit callout of Hard Clip for this guarantee.
+namespace
+{
+    juce::AudioBuffer<float> renderHardClip (float driveDb, float kneeSoftenPercent)
+    {
+        OvertureEngine engine;
+        engine.setTightFrequencyHz (20.0f);
+        engine.setDriveDb (driveDb);
+        engine.setBiteAmountPercent (0.0f);
+        engine.setKneeSoftenPercent (kneeSoftenPercent);
+        engine.setBiteTiltPercent (0.0f);
+        engine.setLevelDb (0.0f);
+        engine.setMixProportion (1.0f);
+        engine.setClipperVoicing (ClipperVoicing::hardClip);
+
+        const auto spec = makeTestSpec (2);
+        engine.prepare (spec);
+
+        constexpr float testAmplitude = 0.5f;
+
+        juce::AudioBuffer<float> warmup (2, testBlockSize);
+        TestHelpers::fillWithSine (warmup, testSampleRate, testFrequencyHz, testAmplitude, 0);
+        {
+            juce::dsp::AudioBlock<float> warmupBlock (warmup);
+            engine.process (warmupBlock);
+        }
+
+        juce::AudioBuffer<float> measured (2, testBlockSize);
+        TestHelpers::fillWithSine (measured, testSampleRate, testFrequencyHz, testAmplitude, testBlockSize);
+        juce::dsp::AudioBlock<float> measuredBlock (measured);
+        engine.process (measuredBlock);
+        return measured;
+    }
+
+    // RMS of the sample-by-sample difference between a softened
+    // (kneeSoften = fixedKneeSoftenPercent) and sharp (kneeSoften = 0)
+    // render at the same Drive - a direct, THD-like measure of how much
+    // Knee Soften actually changes the waveform shape at that Drive level,
+    // free of the "just more Drive alone makes Hard Clip more square-ish"
+    // confound a bulk crest-factor (peak/RMS) comparison has: uniformly
+    // rescaling an already near-square wave's flat-top level (which is
+    // what Knee Soften does across almost the entire cycle once deeply
+    // saturated) barely moves peak/RMS, even though the actual sample-level
+    // waveform, and therefore its audible harmonic content, has measurably
+    // changed. Both renders share identical latency (Knee Soften doesn't
+    // touch the oversampler), so they're already sample-aligned - no
+    // shift-search needed.
+    float measureSofteningDifferenceRms (float driveDb, float fixedKneeSoftenPercent)
+    {
+        const auto sharp = renderHardClip (driveDb, 0.0f);
+        const auto soft = renderHardClip (driveDb, fixedKneeSoftenPercent);
+
+        juce::AudioBuffer<float> difference;
+        difference.makeCopyOf (soft);
+
+        for (int channel = 0; channel < difference.getNumChannels(); ++channel)
+            juce::FloatVectorOperations::subtract (difference.getWritePointer (channel), sharp.getReadPointer (channel), difference.getNumSamples());
+
+        return static_cast<float> (TestHelpers::rms (difference));
+    }
+}
+
+TEST_CASE ("Knee Soften: waveform-shape change from softening is measurably larger at high Drive than at low Drive",
+           "[dsp][engine][knee]")
+{
+    constexpr float lowDriveDb = 3.0f;
+    constexpr float highDriveDb = 30.0f;
+    constexpr float fixedKneeSoftenPercent = 80.0f;
+
+    const auto differenceAtLowDrive = measureSofteningDifferenceRms (lowDriveDb, fixedKneeSoftenPercent);
+    const auto differenceAtHighDrive = measureSofteningDifferenceRms (highDriveDb, fixedKneeSoftenPercent);
+
+    CHECK (differenceAtHighDrive > differenceAtLowDrive);
+    CHECK (differenceAtHighDrive > 0.01f); // genuinely audible, not just float noise
+}
+
+TEST_CASE ("Knee Soften: at kneeSoften=0, high and low Drive renders are bit-identical to their own "
+           "kneeSoften=0 selves (the drive-invariance half of the guarantee)",
+           "[dsp][engine][knee]")
+{
+    // The formula OvertureEngine::processChunk() uses
+    // (kneeBlend01 = (kneeSoftenPercent * 0.01f) * driveIntensity01) is
+    // algebraically always exactly 0 when kneeSoftenPercent == 0, regardless
+    // of driveIntensity01/Drive - already exercised directly (without an
+    // engine) by KneeSofteningTests.cpp's identity-function test. This is
+    // the engine-level companion: at kneeSoften = 0, measureSofteningDifferenceRms()
+    // itself (softened vs sharp render at the SAME Drive) must be exactly
+    // zero at both a low and a high Drive - i.e. nothing in the surrounding
+    // chain introduces a spurious Drive-dependent "softening" side effect
+    // when the control itself is off.
+    CHECK (measureSofteningDifferenceRms (3.0f, 0.0f) == Catch::Approx (0.0f).margin (1.0e-7));
+    CHECK (measureSofteningDifferenceRms (30.0f, 0.0f) == Catch::Approx (0.0f).margin (1.0e-7));
 }

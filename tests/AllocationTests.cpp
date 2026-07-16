@@ -15,9 +15,13 @@
 // Neither pluginval nor auval do allocation-instrumented profiling, and
 // none of the other pre-existing Catch2 tests had an allocation-counting
 // mechanism, so this passed CI clean before. This test exercises the full
-// plugin with automated Tight/Tone/Drive/Mix parameters (so the smoothers
-// keep re-deriving coefficients every block, exactly the code path issue
-// #12 was in) and fails if processBlock() ever touches the heap again.
+// plugin with automated Tight/Bite/Knee Soften/Asymmetry/Bite Tilt/Drive/Mix
+// parameters (so the smoothers keep re-deriving coefficients every block,
+// exactly the code path issue #12 was in, extended in v0.2.0 to the new
+// Bite/Bite Tilt shelf filters, which use the same non-allocating
+// ArrayCoefficients + ovtr::applyBiquadCoefficients pattern - see
+// src/dsp/OvertureEngine.cpp/RealtimeCoefficients.h) and fails if
+// processBlock() ever touches the heap again.
 namespace
 {
     void setParam (OvertureAudioProcessor& processor, const char* id, float realValue)
@@ -28,13 +32,26 @@ namespace
     }
 }
 
-TEST_CASE ("OvertureAudioProcessor::processBlock allocates no memory while Tight/Tone are moving", "[dsp][rt-safety][alloc]")
+TEST_CASE ("OvertureAudioProcessor::processBlock allocates no memory while Tight/Bite/Knee Soften/"
+           "Asymmetry/Bite Tilt are moving",
+           "[dsp][rt-safety][alloc]")
 {
     OvertureAudioProcessor processor;
     processor.prepareToPlay (48000.0, 512);
 
     setParam (processor, ParamIDs::drive, 20.0f);
     setParam (processor, ParamIDs::mix, 100.0f);
+    // Touch every v0.2.0 parameter at least once here, before the guard
+    // starts - setValueNotifyingHost()'s very first call for a given
+    // parameter can lazily warm up internal JUCE bookkeeping (observed:
+    // exactly one allocation the first time a brand-new parameter ID was
+    // first notified from inside the guarded loop below), the same reason
+    // Drive/Mix above are primed before the loop rather than left at their
+    // untouched defaults.
+    setParam (processor, ParamIDs::biteAmount, 10.0f);
+    setParam (processor, ParamIDs::kneeSoften, 10.0f);
+    setParam (processor, ParamIDs::asymmetryAmount, 10.0f);
+    setParam (processor, ParamIDs::biteTilt, -10.0f);
 
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
@@ -52,13 +69,20 @@ TEST_CASE ("OvertureAudioProcessor::processBlock allocates no memory while Tight
 
     for (int block = 0; block < 32; ++block)
     {
-        // Continuously move Tight and Tone every block - this is exactly
-        // the "smoothers keep re-deriving coefficients every block"
-        // scenario issue #12 was filed against (a fixed/settled parameter
-        // wouldn't exercise the bug once its smoother reaches target).
+        // Continuously move every v0.2.0 coefficient-recomputing/blend
+        // control every block - this is exactly the "smoothers keep
+        // re-deriving coefficients every block" scenario issue #12 was
+        // filed against (a fixed/settled parameter wouldn't exercise the
+        // bug once its smoother reaches target), extended to the new Bite
+        // shelf (inside the oversampled block) and Bite Tilt shelf
+        // (post-clip) coefficient updates, and the always-nonzero-here Knee
+        // Soften/Asymmetry blend path.
         const auto sweep = static_cast<float> (block) / 32.0f;
         setParam (processor, ParamIDs::tight, 20.0f + sweep * 380.0f);
-        setParam (processor, ParamIDs::tone, 1000.0f + sweep * 7000.0f);
+        setParam (processor, ParamIDs::biteAmount, sweep * 100.0f);
+        setParam (processor, ParamIDs::kneeSoften, sweep * 100.0f);
+        setParam (processor, ParamIDs::asymmetryAmount, sweep * 100.0f);
+        setParam (processor, ParamIDs::biteTilt, -100.0f + sweep * 200.0f);
 
         TestHelpers::fillWithSine (buffer, 48000.0, 1000.0, 0.5f, static_cast<juce::int64> (block) * 512);
         processor.processBlock (buffer, midi);
@@ -70,9 +94,9 @@ TEST_CASE ("OvertureAudioProcessor::processBlock allocates no memory while Tight
 TEST_CASE ("OvertureEngine::process allocates no memory across repeated blocks", "[dsp][engine][rt-safety][alloc]")
 {
     // Isolated from PluginProcessor/APVTS so this attributes any regression
-    // specifically to OvertureEngine's Tight HPF/Tone LPF coefficient
-    // recompute (basilica-audio/Overture issue #12), independent of the
-    // processor's parameter plumbing.
+    // specifically to OvertureEngine's own coefficient recompute (basilica-
+    // audio/Overture issue #12, extended in v0.2.0 to Bite/Bite Tilt),
+    // independent of the processor's parameter plumbing.
     OvertureEngine engine;
 
     juce::dsp::ProcessSpec spec;
@@ -84,7 +108,10 @@ TEST_CASE ("OvertureEngine::process allocates no memory across repeated blocks",
     engine.setDriveDb (20.0f);
     engine.setMixProportion (1.0f);
     engine.setTightFrequencyHz (300.0f);
-    engine.setToneFrequencyHz (2000.0f);
+    engine.setBiteAmountPercent (50.0f);
+    engine.setKneeSoftenPercent (50.0f);
+    engine.setAsymmetryAmountPercent (50.0f);
+    engine.setBiteTiltPercent (-20.0f);
 
     juce::AudioBuffer<float> buffer (2, 512);
     TestHelpers::fillWithSine (buffer, 48000.0, 1000.0, 0.5f);
@@ -98,12 +125,16 @@ TEST_CASE ("OvertureEngine::process allocates no memory across repeated blocks",
 
     for (int i = 0; i < 32; ++i)
     {
-        // Retarget Tight/Tone every block so the smoothers stay in motion
-        // and process() keeps re-deriving filter coefficients, the same
-        // steady-state condition the processor-level test above exercises.
+        // Retarget every v0.2.0 control every block so the smoothers stay
+        // in motion and process() keeps re-deriving filter coefficients,
+        // the same steady-state condition the processor-level test above
+        // exercises.
         const auto sweep = static_cast<float> (i) / 32.0f;
         engine.setTightFrequencyHz (20.0f + sweep * 380.0f);
-        engine.setToneFrequencyHz (1000.0f + sweep * 7000.0f);
+        engine.setBiteAmountPercent (sweep * 100.0f);
+        engine.setKneeSoftenPercent (sweep * 100.0f);
+        engine.setAsymmetryAmountPercent (sweep * 100.0f);
+        engine.setBiteTiltPercent (-100.0f + sweep * 200.0f);
 
         TestHelpers::fillWithSine (buffer, 48000.0, 1000.0, 0.5f, static_cast<juce::int64> (i) * 512);
         engine.process (block);

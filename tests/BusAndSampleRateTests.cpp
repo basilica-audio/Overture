@@ -33,7 +33,7 @@ TEST_CASE ("Sample-rate sweep 44.1-192 kHz: finite output and valid positive lat
 
         setParam (processor, ParamIDs::drive, 25.0f);
         setParam (processor, ParamIDs::tight, 200.0f);
-        setParam (processor, ParamIDs::tone, 4000.0f);
+        setParam (processor, ParamIDs::biteTilt, -30.0f);
 
         juce::AudioBuffer<float> buffer (2, 256);
         TestHelpers::fillWithSine (buffer, sampleRate, 1000.0, 0.7f);
@@ -133,7 +133,7 @@ TEST_CASE ("Long-run processing (many blocks, several seconds of audio) produces
 
     setParam (processor, ParamIDs::drive, 28.0f);
     setParam (processor, ParamIDs::tight, 180.0f);
-    setParam (processor, ParamIDs::tone, 3500.0f);
+    setParam (processor, ParamIDs::biteTilt, -20.0f);
     setParam (processor, ParamIDs::level, 6.0f);
     setParam (processor, ParamIDs::mix, 85.0f);
 

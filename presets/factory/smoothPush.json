@@ -1,0 +1,17 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.overture",
+    "pluginVersion": "0.2.0",
+    "name": "Smooth Push",
+    "category": "Guitar",
+    "parameters": {
+        "tight": 90.0,
+        "drive": 5.0,
+        "voicing": 1,
+        "biteAmount": 55.0,
+        "kneeSoften": 55.0,
+        "biteTilt": 0.0,
+        "level": 0.0,
+        "mix": 100.0
+    }
+}

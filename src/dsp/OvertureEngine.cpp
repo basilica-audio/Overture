@@ -1,5 +1,6 @@
 #include "OvertureEngine.h"
 
+#include "KneeSoftening.h"
 #include "RealtimeCoefficients.h"
 
 namespace
@@ -7,9 +8,10 @@ namespace
     // Keeps a requested filter frequency safely below Nyquist regardless of
     // host sample rate, so juce::dsp::IIR::Coefficients::makeHighPass/
     // makeLowPass never receives an out-of-range value (which would produce
-    // invalid/NaN coefficients). Tight (max 400 Hz) and Tone (max 8 kHz) are
-    // both far below Nyquist at any realistic audio sample rate, but this
-    // guard costs nothing and removes the assumption entirely.
+    // invalid/NaN coefficients). Tight (max 400 Hz) and the Bite/Bite Tilt
+    // shelf corners (700 Hz/3 kHz fixed) are all far below Nyquist at any
+    // realistic audio sample rate, but this guard costs nothing and removes
+    // the assumption entirely.
     float clampBelowNyquist (float frequencyHz, double sampleRate) noexcept
     {
         const auto nyquist = static_cast<float> (sampleRate) * 0.5f;
@@ -44,8 +46,17 @@ void OvertureEngine::prepare (const juce::dsp::ProcessSpec& spec)
         true);
     oversampler->initProcessing (static_cast<size_t> (spec.maximumBlockSize));
 
-    toneLowPassStage1.prepare (spec);
-    toneLowPassStage2.prepare (spec);
+    // The Bite shelf runs on the up-sampled block (see processChunk()), so
+    // it needs its own ProcessSpec at the oversampled rate/block size, not
+    // the base spec above.
+    oversampledSampleRate = sampleRate * static_cast<double> (oversampler->getOversamplingFactor());
+    juce::dsp::ProcessSpec oversampledSpec;
+    oversampledSpec.sampleRate = oversampledSampleRate;
+    oversampledSpec.maximumBlockSize = spec.maximumBlockSize * static_cast<juce::uint32> (oversampler->getOversamplingFactor());
+    oversampledSpec.numChannels = spec.numChannels;
+    biteShelf.prepare (oversampledSpec);
+
+    biteTiltShelf.prepare (spec);
     outputLevel.setRampDurationSeconds (smoothingTimeSeconds);
     outputLevel.prepare (spec);
 
@@ -72,23 +83,34 @@ void OvertureEngine::prepare (const juce::dsp::ProcessSpec& spec)
     // cutoff of 0 Hz.
     tightFrequencySmoothed.reset (sampleRate, smoothingTimeSeconds);
     tightFrequencySmoothed.setCurrentAndTargetValue (lastTightHz);
-    toneFrequencySmoothed.reset (sampleRate, smoothingTimeSeconds);
-    toneFrequencySmoothed.setCurrentAndTargetValue (lastToneHz);
     mixSmoothed.reset (sampleRate, smoothingTimeSeconds);
     mixSmoothed.setCurrentAndTargetValue (lastMixProportion);
+    biteAmountSmoothed.reset (sampleRate, smoothingTimeSeconds);
+    biteAmountSmoothed.setCurrentAndTargetValue (lastBiteAmountPercent);
+    kneeSoftenSmoothed.reset (sampleRate, smoothingTimeSeconds);
+    kneeSoftenSmoothed.setCurrentAndTargetValue (lastKneeSoftenPercent);
+    asymmetryAmountSmoothed.reset (sampleRate, smoothingTimeSeconds);
+    asymmetryAmountSmoothed.setCurrentAndTargetValue (lastAsymmetryAmountPercent);
+    biteTiltSmoothed.reset (sampleRate, smoothingTimeSeconds);
+    biteTiltSmoothed.setCurrentAndTargetValue (lastBiteTiltPercent);
 
     reset();
 
     // Prime the filter coefficients immediately so the very first
     // process() call runs with correct, non-default coefficients rather
-    // than an identity/uninitialised state. Tone is two cascaded 2nd-order
-    // sections at the same cutoff but different Q (toneFilterQ1/Q2),
-    // forming a single 4th-order Butterworth response.
+    // than an identity/uninitialised state. The allocating
+    // IIR::Coefficients::make*() calls are fine here (prepare() is never
+    // called from the audio thread) - process()/processChunk() instead uses
+    // the non-allocating ArrayCoefficients + ovtr::applyBiquadCoefficients
+    // path (see RealtimeCoefficients.h), which requires `state` to already
+    // hold a validly-shaped (2nd-order) Coefficients object, which is what
+    // this priming step guarantees from the first block onward.
     *tightHighPass.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass (
-        sampleRate, clampBelowNyquist (lastTightHz, sampleRate), tightFilterQ);
-    const auto toneHzClamped = clampBelowNyquist (lastToneHz, sampleRate);
-    *toneLowPassStage1.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHzClamped, toneFilterQ1);
-    *toneLowPassStage2.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, toneHzClamped, toneFilterQ2);
+        sampleRate, clampBelowNyquist (lastTightHz, sampleRate), shelfQ);
+    *biteShelf.state = *juce::dsp::IIR::Coefficients<float>::makeLowShelf (
+        oversampledSampleRate, biteShelfCornerHz, shelfQ, 1.0f); // unity/flat - see processChunk()'s skip-when-0 gate
+    *biteTiltShelf.state = *juce::dsp::IIR::Coefficients<float>::makeHighShelf (
+        sampleRate, biteTiltCornerHz, shelfQ, 1.0f); // unity/flat - see processChunk()'s skip-when-0 gate
 }
 
 void OvertureEngine::reset()
@@ -99,14 +121,15 @@ void OvertureEngine::reset()
     if (oversampler != nullptr)
         oversampler->reset();
 
-    toneLowPassStage1.reset();
-    toneLowPassStage2.reset();
+    biteShelf.reset();
+    biteTiltShelf.reset();
     outputLevel.reset();
     dryWetMixer.reset();
 }
 
 void OvertureEngine::setDriveDb (float newDriveDb)
 {
+    lastDriveDb = newDriveDb;
     driveGain.setGainDecibels (newDriveDb);
 }
 
@@ -114,12 +137,6 @@ void OvertureEngine::setTightFrequencyHz (float newFrequencyHz)
 {
     lastTightHz = newFrequencyHz;
     tightFrequencySmoothed.setTargetValue (newFrequencyHz);
-}
-
-void OvertureEngine::setToneFrequencyHz (float newFrequencyHz)
-{
-    lastToneHz = newFrequencyHz;
-    toneFrequencySmoothed.setTargetValue (newFrequencyHz);
 }
 
 void OvertureEngine::setLevelDb (float newLevelDb)
@@ -131,6 +148,30 @@ void OvertureEngine::setMixProportion (float newProportion01)
 {
     lastMixProportion = newProportion01;
     mixSmoothed.setTargetValue (newProportion01);
+}
+
+void OvertureEngine::setBiteAmountPercent (float newBiteAmountPercent)
+{
+    lastBiteAmountPercent = newBiteAmountPercent;
+    biteAmountSmoothed.setTargetValue (newBiteAmountPercent);
+}
+
+void OvertureEngine::setKneeSoftenPercent (float newKneeSoftenPercent)
+{
+    lastKneeSoftenPercent = newKneeSoftenPercent;
+    kneeSoftenSmoothed.setTargetValue (newKneeSoftenPercent);
+}
+
+void OvertureEngine::setAsymmetryAmountPercent (float newAsymmetryAmountPercent)
+{
+    lastAsymmetryAmountPercent = newAsymmetryAmountPercent;
+    asymmetryAmountSmoothed.setTargetValue (newAsymmetryAmountPercent);
+}
+
+void OvertureEngine::setBiteTiltPercent (float newBiteTiltPercent)
+{
+    lastBiteTiltPercent = newBiteTiltPercent;
+    biteTiltSmoothed.setTargetValue (newBiteTiltPercent);
 }
 
 void OvertureEngine::setClipperVoicing (ClipperVoicing newVoicing) noexcept
@@ -177,30 +218,27 @@ void OvertureEngine::processChunk (juce::dsp::AudioBlock<float>& block)
     const auto numSamples = block.getNumSamples();
 
     // Coefficient recomputation involves trig calls (tan/cos), so filter
-    // frequencies are smoothed and re-derived once per chunk rather than
-    // per sample - a standard real-time-safe compromise for IIR filters,
-    // whose coefficients aren't cheap to interpolate directly. Drive/Level
-    // still ramp sample-accurately via juce::dsp::Gain's internal
-    // SmoothedValue, and Mix is re-applied every chunk below.
+    // frequencies/percentages are smoothed and re-derived once per chunk
+    // rather than per sample - a standard real-time-safe compromise for IIR
+    // filters, whose coefficients aren't cheap to interpolate directly.
+    // Drive/Level still ramp sample-accurately via juce::dsp::Gain's
+    // internal SmoothedValue, and Mix is re-applied every chunk below.
     const auto tightHz = clampBelowNyquist (tightFrequencySmoothed.skip (static_cast<int> (numSamples)), sampleRate);
-    const auto toneHz = clampBelowNyquist (toneFrequencySmoothed.skip (static_cast<int> (numSamples)), sampleRate);
     const auto wetMix = mixSmoothed.skip (static_cast<int> (numSamples));
+    const auto biteAmountPercent = biteAmountSmoothed.skip (static_cast<int> (numSamples));
+    const auto kneeSoftenPercent = kneeSoftenSmoothed.skip (static_cast<int> (numSamples));
+    const auto asymmetryAmountPercent = asymmetryAmountSmoothed.skip (static_cast<int> (numSamples));
+    const auto biteTiltPercent = biteTiltSmoothed.skip (static_cast<int> (numSamples));
 
     // Non-allocating coefficient update (issue #12): ArrayCoefficients::
-    // makeHighPass/makeLowPass compute into a stack std::array, which
+    // makeHighPass computes into a stack std::array, which
     // applyBiquadCoefficients then writes into the already-allocated
     // Coefficients storage primed by prepare() - no heap traffic on the
-    // audio thread, unlike the IIR::Coefficients::makeHighPass/makeLowPass
-    // this replaced (each of which `new`s a fresh ref-counted Coefficients
-    // object, including its own heap-backed Array, per call).
+    // audio thread, unlike the IIR::Coefficients::makeHighPass this
+    // replaced (which `new`s a fresh ref-counted Coefficients object,
+    // including its own heap-backed Array, per call).
     ovtr::applyBiquadCoefficients (*tightHighPass.state,
-        juce::dsp::IIR::ArrayCoefficients<float>::makeHighPass (sampleRate, tightHz, tightFilterQ));
-    // Both tone sections share the same cutoff; only Q differs, per the
-    // 4th-order Butterworth cascade design (see toneFilterQ1/Q2 docs).
-    ovtr::applyBiquadCoefficients (*toneLowPassStage1.state,
-        juce::dsp::IIR::ArrayCoefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ1));
-    ovtr::applyBiquadCoefficients (*toneLowPassStage2.state,
-        juce::dsp::IIR::ArrayCoefficients<float>::makeLowPass (sampleRate, toneHz, toneFilterQ2));
+        juce::dsp::IIR::ArrayCoefficients<float>::makeHighPass (sampleRate, tightHz, shelfQ));
     dryWetMixer.setWetMixProportion (wetMix);
 
     juce::dsp::ProcessContextReplacing<float> context (block);
@@ -216,6 +254,44 @@ void OvertureEngine::processChunk (juce::dsp::AudioBlock<float>& block)
 
     auto oversampledBlock = oversampler->processSamplesUp (block);
 
+    // Bite: frequency-dependent gain INSIDE the drive-to-clipper path (see
+    // docs/design-brief.md SS"bite_amount" and the class-level docs in
+    // OvertureEngine.h) - a low-shelf run on the up-sampled block,
+    // immediately before the nonlinearity, that reduces the drive fed to
+    // the clipper below biteShelfCornerHz, scaled by biteAmountPercent.
+    // Skipped entirely (not just given unity-gain coefficients) when
+    // biteAmountPercent is exactly 0, so bite_amount = 0 leaves the
+    // oversampled signal reaching the clipper bit-identical to v0.1's plain
+    // drive-gain-then-clip path - the backward-compatibility guarantee
+    // tests/EngineTests.cpp's null tests verify.
+    if (biteAmountPercent > 0.0f)
+    {
+        const auto biteCutDb = -(biteAmountPercent * 0.01f) * biteShelfMaxCutDb;
+        const auto biteGainFactor = juce::Decibels::decibelsToGain (biteCutDb);
+
+        ovtr::applyBiquadCoefficients (*biteShelf.state,
+            juce::dsp::IIR::ArrayCoefficients<float>::makeLowShelf (oversampledSampleRate, biteShelfCornerHz, shelfQ, biteGainFactor));
+
+        juce::dsp::ProcessContextReplacing<float> biteContext (oversampledBlock);
+        biteShelf.process (biteContext);
+    }
+
+    // Asymmetry: asymmetryAmount (0-100%) maps linearly to the Asymmetric
+    // voicing's bias `a` in 0.0-asymmetryMaxBias. Only the Asymmetric
+    // voicing consumes this (see ClipperVoicings::processSample) - Soft
+    // Symmetric/Hard Clip ignore it, exactly as in v0.1.
+    const auto asymmetryA = (asymmetryAmountPercent * 0.01f) * asymmetryMaxBias;
+
+    // Knee Soften: drive-dependent knee-softening blend amount (see
+    // src/dsp/KneeSoftening.h). driveIntensity01 is a real-time-safe,
+    // block-rate proxy for "how hard is the clipper currently being
+    // driven" (lastDriveDb normalised against Drive's own 0-40 dB range) -
+    // at kneeSoftenPercent == 0 this product is always exactly 0 regardless
+    // of Drive, reproducing v0.1's Drive-invariant fixed-knee behaviour
+    // exactly.
+    const auto driveIntensity01 = juce::jlimit (0.0f, 1.0f, lastDriveDb / driveIntensityReferenceDb);
+    const auto kneeBlend01 = (kneeSoftenPercent * 0.01f) * driveIntensity01;
+
     // currentVoicing does not change mid-block (set at most once per
     // process() call from the processor's atomic parameter read), so this
     // switch is effectively free per sample - see ClipperVoicings::processSample.
@@ -224,13 +300,30 @@ void OvertureEngine::processChunk (juce::dsp::AudioBlock<float>& block)
         auto* channelData = oversampledBlock.getChannelPointer (channel);
 
         for (size_t sample = 0; sample < oversampledBlock.getNumSamples(); ++sample)
-            channelData[sample] = ClipperVoicings::processSample (channelData[sample], currentVoicing, clipperAsymmetry);
+        {
+            const auto raw = ClipperVoicings::processSample (channelData[sample], currentVoicing, asymmetryA);
+            channelData[sample] = kneeBlend01 > 0.0f ? KneeSoftening::apply (raw, kneeBlend01) : raw;
+        }
     }
 
     oversampler->processSamplesDown (block);
 
-    toneLowPassStage1.process (context);
-    toneLowPassStage2.process (context);
+    // Bite Tilt: post-clip bidirectional shelf (replaces v0.1's cut-only
+    // Tone LPF - see docs/design-brief.md's "Bite" section and the
+    // class-level docs in OvertureEngine.h). Skipped entirely when
+    // biteTiltPercent is exactly 0 (the default, flat position), so it is a
+    // true no-op rather than a unity-gain filter call - the
+    // bidirectionality guarantee tests/EngineTests.cpp verifies.
+    if (biteTiltPercent != 0.0f)
+    {
+        const auto tiltDb = (biteTiltPercent * 0.01f) * biteTiltMaxDb;
+        const auto tiltGainFactor = juce::Decibels::decibelsToGain (tiltDb);
+
+        ovtr::applyBiquadCoefficients (*biteTiltShelf.state,
+            juce::dsp::IIR::ArrayCoefficients<float>::makeHighShelf (sampleRate, biteTiltCornerHz, shelfQ, tiltGainFactor));
+        biteTiltShelf.process (context);
+    }
+
     outputLevel.process (context);
 
     dryWetMixer.mixWetSamples (block);
