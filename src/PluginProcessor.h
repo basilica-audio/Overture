@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "dsp/OvertureEngine.h"
+#include "presets/PresetManager.h"
 
 // Overture: a TS-808-style tight overdrive/boost. Signal flow lives in
 // OvertureEngine (src/dsp) so it stays unit-testable independent of this
@@ -59,6 +60,14 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // M2 preset system (.scaffold/specs/preset-system-m2.md,
+    // src/presets/PresetManager.h). Constructed after apvts (its
+    // constructor registers APVTS parameter listeners) and public so
+    // OvertureAudioProcessorEditor's PresetBar can talk to it directly - the
+    // same "processor owns it, editor references it" pattern apvts itself
+    // already uses.
+    basilica::presets::PresetManager presetManager;
+
 private:
     OvertureEngine engine;
 
@@ -67,7 +76,10 @@ private:
     // them (no allocation/locks on the audio thread).
     std::atomic<float>* tightHz = nullptr;
     std::atomic<float>* driveDb = nullptr;
-    std::atomic<float>* toneHz = nullptr;
+    std::atomic<float>* biteAmountPercent = nullptr;
+    std::atomic<float>* kneeSoftenPercent = nullptr;
+    std::atomic<float>* asymmetryAmountPercent = nullptr;
+    std::atomic<float>* biteTiltPercent = nullptr;
     std::atomic<float>* levelDb = nullptr;
     std::atomic<float>* mixPercent = nullptr;
     std::atomic<float>* bypassFlag = nullptr;

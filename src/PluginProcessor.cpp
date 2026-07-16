@@ -3,16 +3,70 @@
 #include "params/ParameterIds.h"
 #include "params/ParameterLayout.h"
 
+#include <BinaryData.h>
+
+//==============================================================================
+namespace
+{
+    // The small, Overture-specific config surface PresetManager needs (see
+    // src/presets/PresetManager.h's class docs) - everything else about the
+    // preset system is fully generic and portable across the Basilica Audio
+    // suite (see docs/preset-system-notes.md, copied from the Nave pilot).
+    basilica::presets::PresetManagerConfig makePresetManagerConfig()
+    {
+        // JucePlugin_CFBundleIdentifier expands to a raw (unquoted) token
+        // sequence, not a string literal - JUCE_STRINGIFY() is the
+        // documented way to turn it into one. Always
+        // "com.yvesvogl.overture" here (BUNDLE_ID in CMakeLists.txt),
+        // matching the "plugin" field baked into every
+        // presets/factory/*.json file.
+        basilica::presets::PresetManagerConfig config;
+        config.pluginId = JUCE_STRINGIFY (JucePlugin_CFBundleIdentifier);
+        config.pluginName = JucePlugin_Name;
+        config.manufacturerName = "Yves Vogl";
+        config.pluginVersion = JucePlugin_VersionString;
+        // userPresetsDirectoryOverrideForTests intentionally left
+        // default-constructed (empty) - production instances always use the
+        // real platform-standard preset location (see PresetManager.h).
+        return config;
+    }
+
+    // BinaryData symbol names are derived from the presets/factory/*.json
+    // file names passed to juce_add_binary_data() in CMakeLists.txt (dots
+    // become underscores) - this list must stay in sync with that SOURCES
+    // list. Order here only affects factory-preset iteration order before
+    // getAllPresets() re-sorts alphabetically, so it isn't otherwise
+    // significant.
+    std::vector<basilica::presets::FactoryPresetAsset> makeFactoryPresetAssets()
+    {
+        return {
+            { BinaryData::default_json, BinaryData::default_jsonSize },
+            { BinaryData::classicBoost_json, BinaryData::classicBoost_jsonSize },
+            { BinaryData::cleanPush_json, BinaryData::cleanPush_jsonSize },
+            { BinaryData::dropTuneTight_json, BinaryData::dropTuneTight_jsonSize },
+            { BinaryData::smoothPush_json, BinaryData::smoothPush_jsonSize },
+            { BinaryData::ownDistortion_json, BinaryData::ownDistortion_jsonSize },
+            { BinaryData::fuzzAdjacentLead_json, BinaryData::fuzzAdjacentLead_jsonSize },
+            { BinaryData::parallelGrit_json, BinaryData::parallelGrit_jsonSize },
+            { BinaryData::deFizzCleanup_json, BinaryData::deFizzCleanup_jsonSize },
+        };
+    }
+}
+
 //==============================================================================
 OvertureAudioProcessor::OvertureAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
+      apvts (*this, nullptr, "PARAMETERS", createParameterLayout()),
+      presetManager (apvts, makePresetManagerConfig(), makeFactoryPresetAssets())
 {
     tightHz = apvts.getRawParameterValue (ParamIDs::tight);
     driveDb = apvts.getRawParameterValue (ParamIDs::drive);
-    toneHz = apvts.getRawParameterValue (ParamIDs::tone);
+    biteAmountPercent = apvts.getRawParameterValue (ParamIDs::biteAmount);
+    kneeSoftenPercent = apvts.getRawParameterValue (ParamIDs::kneeSoften);
+    asymmetryAmountPercent = apvts.getRawParameterValue (ParamIDs::asymmetryAmount);
+    biteTiltPercent = apvts.getRawParameterValue (ParamIDs::biteTilt);
     levelDb = apvts.getRawParameterValue (ParamIDs::level);
     mixPercent = apvts.getRawParameterValue (ParamIDs::mix);
     bypassFlag = apvts.getRawParameterValue (ParamIDs::bypass);
@@ -21,12 +75,21 @@ OvertureAudioProcessor::OvertureAudioProcessor()
 
     jassert (tightHz != nullptr);
     jassert (driveDb != nullptr);
-    jassert (toneHz != nullptr);
+    jassert (biteAmountPercent != nullptr);
+    jassert (kneeSoftenPercent != nullptr);
+    jassert (asymmetryAmountPercent != nullptr);
+    jassert (biteTiltPercent != nullptr);
     jassert (levelDb != nullptr);
     jassert (mixPercent != nullptr);
     jassert (bypassFlag != nullptr);
     jassert (voicingChoice != nullptr);
     jassert (oversamplingChoice != nullptr);
+
+    // M2 default resolution: user "Default" preset > factory "Default"
+    // preset (there isn't one here - see docs/presets.md) > the
+    // ParameterLayout defaults apvts was just constructed with above (see
+    // PresetManager::applyStartupDefault()'s docs).
+    presetManager.applyStartupDefault();
 }
 
 OvertureAudioProcessor::~OvertureAudioProcessor() = default;
@@ -100,7 +163,10 @@ void OvertureAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     // parameter values rather than the engine's built-in defaults.
     engine.setTightFrequencyHz (tightHz->load (std::memory_order_relaxed));
     engine.setDriveDb (driveDb->load (std::memory_order_relaxed));
-    engine.setToneFrequencyHz (toneHz->load (std::memory_order_relaxed));
+    engine.setBiteAmountPercent (biteAmountPercent->load (std::memory_order_relaxed));
+    engine.setKneeSoftenPercent (kneeSoftenPercent->load (std::memory_order_relaxed));
+    engine.setAsymmetryAmountPercent (asymmetryAmountPercent->load (std::memory_order_relaxed));
+    engine.setBiteTiltPercent (biteTiltPercent->load (std::memory_order_relaxed));
     engine.setLevelDb (levelDb->load (std::memory_order_relaxed));
     engine.setMixProportion (mixPercent->load (std::memory_order_relaxed) * 0.01f);
     engine.setClipperVoicing (static_cast<ClipperVoicing> (static_cast<int> (voicingChoice->load (std::memory_order_relaxed))));
@@ -117,9 +183,9 @@ void OvertureAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
 
     engine.prepare (spec);
 
-    // Oversampling (4x, applied around the clipper) is the only source of
-    // reported latency; the dry path is compensated against it internally
-    // by OvertureEngine's DryWetMixer (see docs/architecture.md).
+    // Oversampling (4x by default, applied around the clipper) is the only
+    // source of reported latency; the dry path is compensated against it
+    // internally by OvertureEngine's DryWetMixer (see docs/architecture.md).
     setLatencySamples (engine.getLatencySamples());
 }
 
@@ -163,7 +229,10 @@ void OvertureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
 
     engine.setTightFrequencyHz (tightHz->load (std::memory_order_relaxed));
     engine.setDriveDb (driveDb->load (std::memory_order_relaxed));
-    engine.setToneFrequencyHz (toneHz->load (std::memory_order_relaxed));
+    engine.setBiteAmountPercent (biteAmountPercent->load (std::memory_order_relaxed));
+    engine.setKneeSoftenPercent (kneeSoftenPercent->load (std::memory_order_relaxed));
+    engine.setAsymmetryAmountPercent (asymmetryAmountPercent->load (std::memory_order_relaxed));
+    engine.setBiteTiltPercent (biteTiltPercent->load (std::memory_order_relaxed));
     engine.setLevelDb (levelDb->load (std::memory_order_relaxed));
     engine.setClipperVoicing (static_cast<ClipperVoicing> (static_cast<int> (voicingChoice->load (std::memory_order_relaxed))));
 
@@ -209,8 +278,45 @@ void OvertureAudioProcessor::setStateInformation (const void* data, int sizeInBy
 {
     const std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
 
-    if (xmlState != nullptr && xmlState->hasTagName (apvts.state.getType()))
-        apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+    if (xmlState == nullptr || ! xmlState->hasTagName (apvts.state.getType()))
+        return;
+
+    // v0.2.0 tolerant, lossy migration of a v0.1-only "tone" (cut-only,
+    // 1-8 kHz low-pass) session value into the new bidirectional
+    // "biteTilt" parameter (docs/design-brief.md's "Migration" section;
+    // ParamIDs::tone's docs). Detected BEFORE apvts.replaceState() below,
+    // since a v0.1 saved XML tree has no "biteTilt" PARAM node at all for
+    // replaceState() to apply - APVTS itself silently ignores PARAM nodes
+    // that don't match a currently-registered parameter ID (the same
+    // tolerant-import behaviour the M2 preset system's JSON format uses),
+    // which is what makes loading an old session safe but insufficient on
+    // its own to recover the old Tone value's intent.
+    float migratedBiteTiltPercent = 0.0f;
+    bool shouldApplyMigratedBiteTilt = false;
+
+    for (auto* child : xmlState->getChildIterator())
+    {
+        if (child->hasTagName ("PARAM") && child->getStringAttribute ("id") == juce::String (ParamIDs::tone))
+        {
+            // v0.1's Tone range was 1000-8000 Hz, cut-only (higher Hz =
+            // more open/brighter, per docs/design-brief.md). Linear map:
+            // 1000 Hz (v0.1's fully-closed/darkest Tone) -> -100%
+            // (maximally negative/dark biteTilt); 8000 Hz (v0.1's
+            // fully-open/brightest Tone) -> 0% (flat) - a lossy,
+            // best-effort equivalence, not a mathematically exact one, per
+            // the brief's own "Migration" section.
+            const auto legacyToneHz = juce::jlimit (1000.0, 8000.0, child->getDoubleAttribute ("value", 8000.0));
+            migratedBiteTiltPercent = static_cast<float> (-100.0 * (8000.0 - legacyToneHz) / 7000.0);
+            shouldApplyMigratedBiteTilt = true;
+            break;
+        }
+    }
+
+    apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+
+    if (shouldApplyMigratedBiteTilt)
+        if (auto* biteTiltParam = apvts.getParameter (ParamIDs::biteTilt))
+            biteTiltParam->setValueNotifyingHost (biteTiltParam->convertTo0to1 (migratedBiteTiltPercent));
 }
 
 //==============================================================================

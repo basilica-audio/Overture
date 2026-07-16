@@ -14,30 +14,36 @@
 
 Overture is a TS-808-style tight overdrive/boost built on JUCE 8, aimed at the pre-amp tightening stage metal guitarists run in front of a high-gain amp: it strips low end before the clipper (the "808 boost" trick) so palm mutes stay tight instead of farting out into the gain stage, then drives an oversampled, selectable-voicing clipper for the actual overdrive character. See [`docs/manual.md`](docs/manual.md) for the full user manual (signal flow, every parameter explained, and usage tips).
 
-## Features (v0.1.0 scope)
+## Features (v0.2.0 scope)
 
-- **Tight** - high-pass pre-emphasis, 20 Hz - 400 Hz (default 130 Hz), removes low end before the clipper
-- **Drive** - 0 - 40 dB of gain into the clipper
+- **Tight** - high-pass pre-emphasis, 20 Hz - 400 Hz (default 100 Hz), removes low end before the clipper
+- **Drive** - 0 - 40 dB of gain into the clipper (default 3 dB)
+- **Bite** - frequency-dependent gain *inside* the drive-to-clipper path (0-100%, default 65%) - bass is clipped less than treble, reproducing the reference circuit's own tightening mechanism rather than approximating it with a separate filter
+- **Knee Soften** - drive-dependent knee softening (0-100%, default 40%), applies to all three voicings including Hard Clip
+- **Asymmetry** - exposes the Asymmetric voicing's internal bias as a 0-100% control (default 40%, reproducing v0.1's fixed bias)
 - **Voicing** - Asymmetric (biased tanh, the original "808 boost" character), Soft Symmetric (unbiased tanh), or Hard Clip (straight clamp), run inside oversampling to keep aliasing out of the clipped signal
-- **Tone** - post-clip low-pass, 1 kHz - 8 kHz (default 6 kHz), 4th-order (24 dB/oct) for effective fizz control without touching the fundamental
+- **Bite Tilt** - post-clip bidirectional shelf around a ~3 kHz corner (-100% to +100%, default 0%/flat), replacing v0.1's cut-only Tone - darkens *or* brightens
 - **Level** - output trim, -24 dB to +24 dB
 - **Mix** - dry/wet, with the dry path delay-compensated against the oversampling latency so Mix at 0% is a sample-accurate passthrough
 - **Bypass** - host-visible soft bypass; keeps the oversampler running and latency reporting stable, crossfades instead of clicking
 - **Oversampling** - 2x / 4x / 8x, selectable; takes effect on the next host re-initialisation (real-time-safe by design - see [`docs/manual.md`](docs/manual.md))
-- Full state save/recall via `AudioProcessorValueTreeState`
+- **Presets** - nine factory presets plus full user preset management (save/load/import/export/default), with a German-localised preset bar frame
+- Full state save/recall via `AudioProcessorValueTreeState`, with tolerant migration of v0.1 sessions
 
 ## Signal flow
 
 ```
-Input --> Tight (HPF, 20-400 Hz) --> Drive (0-40 dB) --> [oversampled] Voicing clipper
+Input --> Tight (HPF, 20-400 Hz) --> Drive (0-40 dB) --> [oversampled]
+            Bite shelf (~700 Hz, inside the drive-to-clipper path)
+            --> Voicing clipper --> Knee Soften blend
                                                                   |
-      Output <-- Mix <-- Level (output trim) <-- Tone (4th-order LPF, 1-8 kHz) <--+
+      Output <-- Mix <-- Level <-- Bite Tilt (+/-3 kHz shelf) <--+
         ^
         |
    delay-compensated dry path (also used by Bypass)
 ```
 
-See [`docs/architecture.md`](docs/architecture.md) for the full engineering breakdown, including the oversampling/latency-compensation strategy and parameter smoothing.
+See [`docs/architecture.md`](docs/architecture.md) for the full engineering breakdown, including the oversampling/latency-compensation strategy and parameter smoothing, and [`docs/design-brief.md`](docs/design-brief.md)/[`docs/research-notes.md`](docs/research-notes.md) for the sourced rationale behind the v0.2.0 rework.
 
 ## Roadmap
 
@@ -45,7 +51,7 @@ See [`docs/architecture.md`](docs/architecture.md) for the full engineering brea
 |---|---|---|
 | M0 | Bootstrap - project skeleton, CI, docs | Done |
 | M1 | DSP completion & test coverage - Voicing/Bypass/Oversampling, 4th-order Tone stack, tuned defaults, broadened Catch2 suite | Done |
-| M2 | Presets & state recall | Planned |
+| M2 | Deep-dive DSP rework (Bite/Knee Soften/Asymmetry/Bite Tilt), presets & state recall, i18n frame | Done |
 | M3 | Custom GUI & accessibility | Planned |
 | M4 | Release engineering - signing, notarization, installers, v1.0.0 | Planned |
 <!-- ==END BODY== -->

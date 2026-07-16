@@ -26,43 +26,100 @@ namespace tbst
         juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
         //======================================================================
-        // Tight: high-pass pre-emphasis, 20-400 Hz, default 130 Hz - the
-        // "808 boost" tightening knob that strips low end before the
-        // clipper. 130 Hz sits close to the classic "808-mod" HPF corner
-        // used ahead of a high-gain amp: high enough to keep palm mutes on
-        // drop-tuned guitars tight, low enough to leave the fundamental of
-        // open/low chords intact.
+        // Tight: high-pass pre-emphasis, 20-400 Hz, default 100 Hz (v0.2.0:
+        // was 130 Hz) - the "808 boost" tightening knob that strips low end
+        // before the clipper. 100 Hz is the midpoint of the sourced 80-120 Hz
+        // "cutting everything below 80-120Hz" workflow sweet spot documented
+        // in docs/research-notes.md SS4, rather than v0.1's reasoned-but-
+        // unsourced 130 Hz. Range/structure unchanged from v0.1.
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { ParamIDs::tight, 1 },
             "Tight",
             makeLogFrequencyRange (20.0f, 400.0f),
-            130.0f,
+            100.0f,
             juce::AudioParameterFloatAttributes().withLabel ("Hz")));
 
         //======================================================================
         // Drive: gain into the oversampled clipper (voicing selected via
-        // ParamIDs::voicing). Default 8 dB: a boost stage run in front of an
-        // already-driven amp typically only needs a modest push rather than
-        // heavy clipper-generated distortion of its own - the amp's own
-        // gain stage does the rest.
+        // ParamIDs::voicing). Default 3 dB (v0.2.0: was 8 dB) - the
+        // best-documented canonical workflow for this exact "tight boost in
+        // front of a high-gain amp" technique is clipper drive "at or near
+        // zero" with Level doing the pushing (docs/research-notes.md SS4:
+        // Misha Mansoor's documented approach; Horizon Devices' own Precision
+        // Drive manual: "start with drive near zero... slowly turn up to
+        // around 1-2 [of 10]"). 3 dB is a small, non-zero push that keeps the
+        // clipper audibly alive while sitting in that researched "mostly
+        // clean push" region. Range unchanged (0-40 dB comfortably covers the
+        // reference circuit's own ~21.5-41.5 dB gain-stage range).
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { ParamIDs::drive, 1 },
             "Drive",
             juce::NormalisableRange<float> (0.0f, 40.0f, 0.01f),
-            8.0f,
+            3.0f,
             juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
         //======================================================================
-        // Tone: post-clip low-pass tilt (4th-order Butterworth, see
-        // OvertureEngine), 1-8 kHz, default 6 kHz. Left comparatively bright
-        // by default so the amp's own tone stack - not this pre-clip
-        // tightening stage - handles final top-end voicing.
+        // Bite: frequency-dependent gain inside the drive-to-clipper gain
+        // path (new in v0.2.0 - see docs/design-brief.md's "bite_amount"
+        // section and OvertureEngine.cpp). 0-100%, default 65%. At 0% the
+        // clipper's drive gain is flat with frequency - a full
+        // backward-compatible no-op, bit-identical to v0.1's clipper (see
+        // tests/EngineTests.cpp's backward-compatibility null tests).
+        // Default 65% (not 100%) is a reasoned starting compromise, not
+        // sourced to a specific number - flagged as such in the brief.
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { ParamIDs::tone, 1 },
-            "Tone",
-            makeLogFrequencyRange (1000.0f, 8000.0f),
-            6000.0f,
-            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+            juce::ParameterID { ParamIDs::biteAmount, 1 },
+            "Bite",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            65.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        //======================================================================
+        // Knee Soften: drive-dependent knee softening (new in v0.2.0 - see
+        // docs/design-brief.md's "knee_soften" section and
+        // src/dsp/KneeSoftening.h). 0-100%, default 40%. At 0% all three
+        // voicings behave exactly as in v0.1 (bit-identical transfer
+        // functions at every Drive level) - see
+        // tests/EngineTests.cpp/ClipperVoicingTests.cpp. Default 40% is
+        // reasoned (moderate, audible but not smoothing away Hard Clip's
+        // identity), not sourced to a specific number.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::kneeSoften, 1 },
+            "Knee Soften",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            40.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        //======================================================================
+        // Asymmetry: exposes the Asymmetric voicing's internal bias `a`
+        // (fixed at 0.2 in v0.1) as a 0-100% control mapping to `a` in
+        // 0.0-0.5 (new in v0.2.0 - see docs/design-brief.md's
+        // "asymmetry_amount" section). Default 40% -> a = 0.2, reproducing
+        // v0.1's fixed default exactly. Only meaningful for the Asymmetric
+        // voicing - Soft Symmetric/Hard Clip ignore it, as in v0.1.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::asymmetryAmount, 1 },
+            "Asymmetry",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            40.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        //======================================================================
+        // Bite Tilt: post-clip bidirectional tilt anchored at a fixed ~3 kHz
+        // corner (new in v0.2.0, replaces v0.1's cut-only `tone` 1-8 kHz
+        // low-pass - see docs/design-brief.md's "Bite" section and
+        // OvertureEngine.cpp). -100%..+100%, default 0% (flat/no-op).
+        // Negative values darken (subsuming v0.1's entire Tone cut range),
+        // positive values brighten - a capability v0.1 entirely lacked. An
+        // old v0.1 session's `tone` value is lossily migrated into an
+        // equivalent negative biteTilt position on load - see
+        // OvertureAudioProcessor::setStateInformation().
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::biteTilt, 1 },
+            "Bite Tilt",
+            juce::NormalisableRange<float> (-100.0f, 100.0f, 0.1f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
 
         //======================================================================
         // Level: output trim.
@@ -94,6 +151,7 @@ namespace tbst
         //======================================================================
         // Voicing: selects the clipper nonlinearity (src/dsp/ClipperVoicing.h).
         // Default index 0 (Asymmetric) matches the original v0.1 behaviour.
+        // Enum indices are FROZEN - see ClipperVoicing.h.
         layout.add (std::make_unique<juce::AudioParameterChoice> (
             juce::ParameterID { ParamIDs::voicing, 1 },
             "Voicing",

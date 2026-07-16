@@ -1,0 +1,18 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.overture",
+    "pluginVersion": "0.2.0",
+    "name": "Drop-Tune Tight",
+    "category": "Guitar",
+    "parameters": {
+        "tight": 220.0,
+        "drive": 4.0,
+        "voicing": 0,
+        "biteAmount": 80.0,
+        "kneeSoften": 30.0,
+        "asymmetryAmount": 40.0,
+        "biteTilt": -10.0,
+        "level": 0.0,
+        "mix": 100.0
+    }
+}

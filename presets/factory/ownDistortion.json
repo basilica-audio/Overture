@@ -1,0 +1,17 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.overture",
+    "pluginVersion": "0.2.0",
+    "name": "Own Distortion",
+    "category": "Guitar",
+    "parameters": {
+        "tight": 120.0,
+        "drive": 22.0,
+        "voicing": 2,
+        "biteAmount": 40.0,
+        "kneeSoften": 60.0,
+        "biteTilt": 10.0,
+        "level": 0.0,
+        "mix": 100.0
+    }
+}

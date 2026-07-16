@@ -11,16 +11,24 @@
 // buffer/filter/oversampler is allocated in prepare() and never reallocated
 // on the audio thread.
 //
-// Signal flow (see docs/architecture.md for the full diagram and the
-// latency-compensation rationale):
+// Signal flow (v0.2.0 - see docs/design-brief.md and docs/architecture.md
+// for the full diagram, the research-derived rationale for the changes
+// below, and the latency-compensation rationale):
 //
-//   input -> Tight HPF -> Drive gain -> [Nx oversampled] selectable clipper
-//         -> Tone LPF (4th-order cascade) -> Level gain -> Dry/Wet mix -> output
+//   input -> Tight HPF -> Drive gain -> [Nx oversampled]
+//              Bite shelf (frequency-dependent drive, INSIDE the gain path)
+//              -> selectable clipper (Voicing, variable Asymmetry)
+//              -> Knee Soften blend (drive-dependent)
+//         -> Bite Tilt (post-clip bidirectional shelf, replaces v0.1's
+//            cut-only Tone LPF) -> Level gain -> Dry/Wet mix -> output
 //
 // The dry path is delay-compensated against the oversampler's reported
 // latency via juce::dsp::DryWetMixer, so Mix at 0% is a sample-accurate
 // (once shifted by getLatencySamples()) passthrough of the input - this is
-// what the plugin's null test (tests/EngineTests.cpp) exercises.
+// what the plugin's null test (tests/EngineTests.cpp) exercises. None of
+// this v0.1 oversampling/latency/dry-wet architecture changed in v0.2.0 -
+// only what happens inside the Drive -> Clipper -> Tone/Bite portion of the
+// chain (see docs/design-brief.md's "Topology (fixed)" section).
 class OvertureEngine
 {
 public:
@@ -47,16 +55,38 @@ public:
     // with a jassert, which compiles out in Release builds.
     void process (juce::dsp::AudioBlock<float>& block);
 
-    // Parameter setters, in real units (dB, Hz, 0-1 proportion). Safe to
+    // Parameter setters, in real units (dB, Hz, %, 0-1 proportion). Safe to
     // call every block from the audio thread - no allocation/locks. Drive
-    // and Level are smoothed by the underlying juce::dsp::Gain ramp;
-    // Tight/Tone/Mix are smoothed internally and re-applied once per block
-    // (see process()).
+    // and Level are smoothed by the underlying juce::dsp::Gain ramp; every
+    // other continuous control below is smoothed internally and re-applied
+    // once per processed chunk (see processChunk()).
     void setDriveDb (float newDriveDb);
     void setTightFrequencyHz (float newFrequencyHz);
-    void setToneFrequencyHz (float newFrequencyHz);
     void setLevelDb (float newLevelDb);
     void setMixProportion (float newProportion01);
+
+    // Bite: frequency-dependent gain inside the drive-to-clipper gain path,
+    // 0-100 (%). At 0, the clipper's drive is flat with frequency - a full
+    // backward-compatible no-op (see docs/design-brief.md and
+    // OvertureEngine.cpp's processChunk()).
+    void setBiteAmountPercent (float newBiteAmountPercent);
+
+    // Knee Soften: drive-dependent knee softening, 0-100 (%). At 0, every
+    // voicing keeps its exact v0.1 fixed-knee transfer function at every
+    // Drive level (see src/dsp/KneeSoftening.h).
+    void setKneeSoftenPercent (float newKneeSoftenPercent);
+
+    // Asymmetry: 0-100 (%), maps to the Asymmetric voicing's internal bias
+    // `a` in 0.0-0.5. Only meaningful when the current Voicing is
+    // Asymmetric (see ClipperVoicing.h) - the other two voicings ignore it,
+    // as in v0.1's fixed a=0.2.
+    void setAsymmetryAmountPercent (float newAsymmetryAmountPercent);
+
+    // Bite Tilt: post-clip bidirectional shelf around a fixed ~3 kHz
+    // corner, -100..+100 (%). 0 is flat (a true no-op - the filter is
+    // skipped entirely, not just given unity-gain coefficients). Negative
+    // darkens, positive brightens.
+    void setBiteTiltPercent (float newBiteTiltPercent);
 
     // Selects the clipper nonlinearity. Real-time safe (just stores an
     // enum), but not smoothed/crossfaded - switching voicing is a discrete
@@ -78,19 +108,74 @@ public:
 
 private:
     static constexpr double smoothingTimeSeconds = 0.05;
-    static constexpr float clipperAsymmetry = 0.2f;
-    // Butterworth (maximally-flat) Q for the 2nd-order Tight HPF.
-    static constexpr float tightFilterQ = juce::MathConstants<float>::sqrt2 / 2.0f;
-    // Q values for a 4th-order Butterworth low-pass built as a cascade of
-    // two 2nd-order IIR sections at the same cutoff frequency (standard
-    // filter-cookbook values, e.g. Zolzer, DAFX, table for order-4
-    // Butterworth cascades). Steeper (24 dB/oct vs. the previous 12 dB/oct)
-    // roll-off tames post-clipper fizz more effectively without moving the
-    // -3 dB point.
-    static constexpr float toneFilterQ1 = 0.5411961f;
-    static constexpr float toneFilterQ2 = 1.3065630f;
+
+    // Butterworth (maximally-flat) Q for the 2nd-order Tight HPF, and reused
+    // (same "no resonant peak" rationale) as the Q for the Bite shelf and
+    // Bite Tilt shelf's 2nd-order RBJ-cookbook shelf filters below - JUCE
+    // 8.0.14 juce::dsp::IIR::(Array)Coefficients::makeLowShelf/makeHighShelf
+    // do not offer a true first-order (single-pole) shelf, so this uses the
+    // standard 2nd-order shelf with the Q value that gives a maximally-flat
+    // (non-resonant) plateau, the closest built-in equivalent to the
+    // brief's "roughly first-order/6 dB-oct shelf slopes" target - see
+    // docs/design-brief.md's Bite/Bite Tilt sections and
+    // docs/architecture.md for the full citation.
+    static constexpr float shelfQ = juce::MathConstants<float>::sqrt2 / 2.0f;
+
+    // Bite: fixed low-shelf corner anchored to the sourced ~720 Hz
+    // reference-circuit feedback-loop corner (docs/research-notes.md SS3),
+    // rounded per docs/design-brief.md's own "Bite" section. Not exposed as
+    // a user control in v0.2.0.
+    static constexpr float biteShelfCornerHz = 700.0f;
+
+    // Maximum low-shelf cut (dB) applied to bass feeding the clipper at
+    // biteAmount = 100%. Reasoned, not sourced to a specific number
+    // (docs/design-brief.md flags biteAmount's intensity mapping as a
+    // reasoned engineering choice) - 12 dB is a moderate, clearly audible
+    // bass reduction into the clipper without fully removing low-end
+    // content from the nonlinearity.
+    static constexpr float biteShelfMaxCutDb = 12.0f;
+
+    // Bite Tilt: fixed high-shelf corner anchored to the sourced ~3.2 kHz
+    // reference-circuit tone-tilt corner (docs/research-notes.md SS3),
+    // rounded to 3 kHz per docs/design-brief.md's "Bite" section.
+    static constexpr float biteTiltCornerHz = 3000.0f;
+
+    // Maximum tilt (dB) applied at biteTilt = +/-100%. Reasoned, not
+    // sourced - chosen generously (unlike a subtle "mix bus" tilt EQ) so
+    // that the fully-negative setting comfortably subsumes v0.1's entire
+    // cut-only Tone range (a hard backward-compatibility guarantee from
+    // docs/design-brief.md - see tests/EngineTests.cpp's bidirectionality
+    // test, which measures this directly rather than assuming it). A 2nd-
+    // order RBJ shelf (see shelfQ's docs) only asymptotically approaches
+    // this figure well above the corner, so the constant itself has to be
+    // considerably larger than the darkness actually wanted at any single
+    // audible test frequency - 100 dB was tuned empirically against
+    // tests/EngineTests.cpp's "subsumes v0.1's Tone range" comparison at
+    // 4 kHz (2 octaves above v0.1's darkest 1 kHz Tone cutoff).
+    static constexpr float biteTiltMaxDb = 100.0f;
+
+    // Asymmetry: `asymmetryAmount` (0-100%) maps linearly to the
+    // Asymmetric voicing's internal bias `a` in 0.0-this value. 40% (the
+    // parameter's default) * 0.5 = 0.2, exactly reproducing v0.1's fixed
+    // a=0.2 default - see docs/design-brief.md's "asymmetry_amount"
+    // section for the reasoned (not measured) sourcing of the 0.5 ceiling.
+    static constexpr float asymmetryMaxBias = 0.5f;
+
+    // Reference Drive value (dB) used to normalise the "how hard is the
+    // clipper currently being driven" proxy that scales Knee Soften's
+    // effect (see processChunk()) to 0-1 - the top of Drive's own 0-40 dB
+    // range, so Knee Soften reaches its full per-control effect exactly at
+    // maximum Drive.
+    static constexpr float driveIntensityReferenceDb = 40.0f;
 
     double sampleRate = 44100.0;
+
+    // The oversampled processing rate (sampleRate * the oversampler's
+    // actual factor, e.g. 4x), computed once in prepare() once the
+    // oversampler has been (re)constructed - the Bite shelf runs on the
+    // oversampled block (see processChunk()), so its coefficients must be
+    // derived against this rate, not the base sampleRate above.
+    double oversampledSampleRate = 44100.0;
 
     // Requested oversampling factor as a power of two (1 => 2x, 2 => 4x,
     // 3 => 8x); 2 (4x) matches the fixed factor the v0.1 engine always used.
@@ -102,11 +187,21 @@ private:
     juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>> tightHighPass;
     juce::dsp::Gain<float> driveGain;
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
-    // Tone is a 4th-order Butterworth low-pass, built as two cascaded
-    // 2nd-order sections at the same cutoff (toneFilterQ1/toneFilterQ2)
-    // rather than a single 2nd-order section - see the Q constants above.
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>> toneLowPassStage1;
-    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>> toneLowPassStage2;
+
+    // Bite: low-shelf INSIDE the oversampled drive-to-clipper path (see the
+    // class-level signal-flow diagram above) - runs on the up-sampled
+    // block, immediately before the per-sample voicing dispatch loop, and
+    // only when biteAmount > 0 (see processChunk()).
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>> biteShelf;
+
+    // Bite Tilt: post-clip, post-downsample bidirectional high-shelf that
+    // replaces v0.1's two cascaded 4th-order-Butterworth-forming Tone
+    // low-pass sections. A single 2nd-order shelf is enough for a tilt
+    // control (see the shelfQ docs above) - only applied when biteTilt != 0
+    // (see processChunk()), so the flat/0% default is a true no-op rather
+    // than a unity-gain filter call.
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>> biteTiltShelf;
+
     juce::dsp::Gain<float> outputLevel;
 
     // Sized generously above any realistic oversampling latency (even at
@@ -118,24 +213,40 @@ private:
     juce::dsp::DryWetMixer<float> dryWetMixer { 1024 };
 
     // Frequency parameters use multiplicative smoothing (appropriate for
-    // quantities that are perceived logarithmically, like Hz); Mix uses
-    // linear smoothing and must be able to reach exactly 0.
+    // quantities that are perceived logarithmically, like Hz); every other
+    // continuous control here (percentages, proportions, +/- tilt) uses
+    // linear smoothing.
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> tightFrequencySmoothed;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> toneFrequencySmoothed;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> mixSmoothed;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> biteAmountSmoothed;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> kneeSoftenSmoothed;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> asymmetryAmountSmoothed;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> biteTiltSmoothed;
 
     // Last commanded values (ParameterLayout defaults until a setter is
     // called), re-applied to the smoothers on every prepare() so re-prepare
     // (sample-rate change, etc.) never resets a live parameter back to a
-    // default or lets a smoother start from an invalid 0 Hz.
-    // Mirrors the v0.1.0 ParameterLayout defaults (see
-    // src/params/ParameterLayout.cpp) so an engine used standalone (as in
-    // most of tests/EngineTests.cpp) without an explicit setter call still
-    // starts from a sane, amp-front-end-tuned value rather than an
-    // arbitrary placeholder.
-    float lastTightHz = 130.0f;
-    float lastToneHz = 6000.0f;
+    // default or lets a smoother start from an invalid 0 Hz. Mirrors the
+    // v0.2.0 ParameterLayout defaults (see src/params/ParameterLayout.cpp)
+    // so an engine used standalone (as in most of tests/EngineTests.cpp)
+    // without an explicit setter call still starts from a sane,
+    // amp-front-end-tuned value rather than an arbitrary placeholder.
+    float lastTightHz = 100.0f;
     float lastMixProportion = 1.0f;
+    float lastBiteAmountPercent = 65.0f;
+    float lastKneeSoftenPercent = 40.0f;
+    float lastAsymmetryAmountPercent = 40.0f;
+    float lastBiteTiltPercent = 0.0f;
+
+    // The last commanded Drive value (dB) - not itself smoothed here (Drive
+    // is smoothed by driveGain's own internal juce::dsp::Gain ramp, which
+    // doesn't expose a "current ramped value" getter); used as a real-time-
+    // safe, block-rate proxy for "how hard is the clipper currently being
+    // driven" that scales Knee Soften's effect (see processChunk() and
+    // src/dsp/KneeSoftening.h's docs) - the same "one block-rate snapshot
+    // per chunk" compromise Tight/Bite/Bite Tilt's own coefficient
+    // recomputation already makes.
+    float lastDriveDb = 3.0f;
 
     int latencySamples = 0;
 
@@ -145,10 +256,10 @@ private:
     // DryWetMixer's internal buffers were actually sized for (issue #13).
     size_t preparedMaxBlockSize = 0;
 
-    // Runs the full Tight -> Drive -> oversampled clipper -> Tone -> Level
-    // -> Mix chain in place on a single chunk of at most
-    // preparedMaxBlockSize samples. Called once per chunk by process(),
-    // which is what performs the size-based splitting.
+    // Runs the full Tight -> Drive -> oversampled Bite/Voicing/Knee Soften
+    // -> Bite Tilt -> Level -> Mix chain in place on a single chunk of at
+    // most preparedMaxBlockSize samples. Called once per chunk by
+    // process(), which is what performs the size-based splitting.
     void processChunk (juce::dsp::AudioBlock<float>& block);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvertureEngine)
