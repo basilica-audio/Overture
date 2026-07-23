@@ -78,6 +78,21 @@ juce_add_binary_data(OvertureBinaryData SOURCES
     presets/factory/tightRhythmGate.json
     presets/factory/circuitDrive.json
     resources/i18n/de.txt
+    # M3 photoreal GUI assets (resources/gui/, copied from the suite's
+    # Blender pre-render pipeline at .scaffold/gui-assets/ - see each asset
+    # family's README there for provenance/verification, and
+    # basilica-audio/silentium's M3 pilot for the pattern this replicates).
+    # The repo is self-contained: these copies are the ones the plugin ships
+    # with.
+    resources/gui/knob_brass_strip_160px_128f.png
+    resources/gui/knob_brass_strip_320px_128f.png
+    resources/gui/toggle_brass_strip_100px_4f.png
+    resources/gui/toggle_brass_strip_200px_4f.png
+    resources/gui/faceplate_overture_900x600.png
+    resources/gui/faceplate_overture_1800x1200.png
+    # Brand icon (already the plugin's ICON_BIG; embedded here additionally
+    # so the editor can draw it in the faceplate's header roundel).
+    docs/assets/icon-256.png
 )
 
 # ==============================================================================
