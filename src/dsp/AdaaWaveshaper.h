@@ -122,7 +122,12 @@ namespace basilica::dsp
             // asymmetry) pair it was computed with; a discrete voicing switch
             // or a moving Asymmetry control invalidates it, so recompute
             // rather than mixing two different F's across one difference.
-            if (! state.primed || state.voicing != voicing || state.asymmetry != a)
+            // Exact comparison is what is wanted here (any change at all
+            // invalidates the stored antiderivative), expressed with < so it
+            // does not trip -Wfloat-equal.
+            const auto sameAsymmetry = ! (state.asymmetry < a) && ! (a < state.asymmetry);
+
+            if (! state.primed || state.voicing != voicing || ! sameAsymmetry)
             {
                 state.previousInput = u;
                 state.previousAntiderivative = adaa::antiderivative (u, voicing, a);
