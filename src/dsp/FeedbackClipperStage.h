@@ -257,24 +257,57 @@ namespace basilica::dsp
             return isAmps * (std::exp (forward) / (forwardScale * nvt) + std::exp (reverse) / nvt);
         }
 
-        // Safeguarded Newton with a guaranteed bracket.
+        // Safeguarded Newton with a guaranteed, DIODE-AWARE bracket.
         //
         // g(0) = -p and g is strictly increasing, so the root always lies
-        // between 0 and p/(1+a) (for y beyond p/(1+a) the linear term alone
-        // already overshoots p, and iD only pushes further in the same
-        // direction). Newton steps that would leave that bracket are
-        // replaced by a bisection step, which is why the iteration cap can
-        // be hard rather than best-effort.
+        // between 0 and the point where either term of g alone already
+        // reaches p. Both give a valid bound, and taking the tighter one
+        // matters enormously here: the purely linear bound p/(1+a) can be
+        // tens of volts on a hot transient, while the true root never leaves
+        // the +/-0.7 V a silicon junction can hold. Starting Newton from a
+        // bracket that wide walks it straight into the exp() argument clamp,
+        // where the derivative saturates and the iteration creeps by ~n*VT
+        // per step - it then runs out of its iteration budget nowhere near
+        // the root and poisons the next sample's right-hand side.
+        //
+        // For y > 0, exp(-y/(n*VT)) <= 1, so
+        //     g(y) >= (1 + a)*y + R2*Is*(exp(y/(mf*n*VT)) - 1) - p
+        // and each term reaching p on its own bounds the root from above:
+        //     yMax = min( p/(1+a),  mf*n*VT*ln(1 + p/(R2*Is)) ).
+        // The y < 0 branch is the mirror image with mf = 1 (the reverse
+        // diode is never scaled by the asymmetry morph).
+        //
+        // Newton steps that would leave the bracket are replaced by a
+        // bisection step; g is strictly monotone, so that fallback is
+        // guaranteed to terminate, which is what makes the hard 8-iteration
+        // cap safe (T-F4).
         double solve (double p, double a, double r2, double warmStart) noexcept
         {
-            const auto linearRoot = p / (1.0 + a);
-            auto low = std::min (0.0, linearRoot);
-            auto high = std::max (0.0, linearRoot);
+            const auto nvt = emissionCoefficient * thermalVoltage;
+            const auto forwardScale = 1.0 + asymmetry01;
+            const auto r2Is = r2 * isAmps;
+
+            double low = 0.0;
+            double high = 0.0;
+
+            if (p >= 0.0)
+            {
+                high = std::min (p / (1.0 + a), forwardScale * nvt * std::log1p (p / r2Is));
+            }
+            else
+            {
+                low = -std::min (-p / (1.0 + a), nvt * std::log1p (-p / r2Is));
+            }
 
             auto y = juce::jlimit (low, high, warmStart);
 
             constexpr int maxIterations = 8;
-            constexpr double residualTolerance = 1.0e-13;
+
+            // Relative residual: p spans microvolts (small signal) to tens
+            // of volts (a hot transient into a low feedback resistance), so
+            // an absolute tolerance would be unreachable at one end and
+            // wastefully strict at the other.
+            const auto residualTolerance = 1.0e-12 * std::max (1.0, std::abs (p));
             constexpr double stepTolerance = 1.0e-13;
 
             int iteration = 0;
