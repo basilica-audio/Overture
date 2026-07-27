@@ -40,6 +40,35 @@ namespace
             { BinaryData::fuzzAdjacentLead_json, BinaryData::fuzzAdjacentLead_jsonSize },
             { BinaryData::parallelGrit_json, BinaryData::parallelGrit_jsonSize },
             { BinaryData::deFizzCleanup_json, BinaryData::deFizzCleanup_jsonSize },
+            // New in v0.3.0 (brief SS4).
+            { BinaryData::tightRhythmGate_json, BinaryData::tightRhythmGate_jsonSize },
+            { BinaryData::circuitDrive_json, BinaryData::circuitDrive_jsonSize },
+        };
+    }
+
+    // The nine v0.2.0 factory presets, in the order they are embedded. These
+    // files are BYTE-FROZEN as of v0.3.0: they carry none of the five new
+    // parameters, and the tolerant JSON importer must therefore leave those
+    // at their neutral defaults (T-S3 below).
+    struct LegacyFactoryPreset
+    {
+        const char* name;
+        const char* data;
+        int size;
+    };
+
+    std::vector<LegacyFactoryPreset> makeLegacyFactoryPresets()
+    {
+        return {
+            { "Default", BinaryData::default_json, BinaryData::default_jsonSize },
+            { "Clean Push", BinaryData::cleanPush_json, BinaryData::cleanPush_jsonSize },
+            { "Classic Boost", BinaryData::classicBoost_json, BinaryData::classicBoost_jsonSize },
+            { "Drop-Tune Tight", BinaryData::dropTuneTight_json, BinaryData::dropTuneTight_jsonSize },
+            { "Smooth Push", BinaryData::smoothPush_json, BinaryData::smoothPush_jsonSize },
+            { "Own Distortion", BinaryData::ownDistortion_json, BinaryData::ownDistortion_jsonSize },
+            { "Fuzz-Adjacent Lead", BinaryData::fuzzAdjacentLead_json, BinaryData::fuzzAdjacentLead_jsonSize },
+            { "Parallel Grit", BinaryData::parallelGrit_json, BinaryData::parallelGrit_jsonSize },
+            { "De-Fizz Cleanup", BinaryData::deFizzCleanup_json, BinaryData::deFizzCleanup_jsonSize },
         };
     }
 
@@ -231,7 +260,9 @@ TEST_CASE ("PresetManager: every factory preset parses and loads without error",
     const auto factoryCount = std::count_if (allPresets.begin(), allPresets.end(),
                                               [] (const PresetManager::PresetEntry& e) { return e.isFactory; });
 
-    CHECK (factoryCount == 9); // Default + the brief's 8 (docs/presets.md)
+    // v0.2.0's nine (Default + the brief's 8) plus v0.3.0's two
+    // (docs/presets.md).
+    CHECK (factoryCount == 11);
 
     for (auto& entry : allPresets)
     {
@@ -553,4 +584,125 @@ TEST_CASE ("PresetManager: parameter-driven dirty tracking coexists safely with 
     }
 
     CHECK (manager.isDirty());
+}
+
+//==============================================================================
+// v0.3.0 T-S3: the nine v0.2.0 factory presets are BYTE-FROZEN, and loading
+// one must leave every v0.3.0 parameter at its neutral default.
+//
+// The byte-hash assertion is deliberately blunt: these files ship inside the
+// binary, users' sessions reference them by name, and "someone tidied a
+// preset" is exactly the kind of silent change that only shows up as a
+// customer complaint. The tolerant JSON importer (PresetManager::
+// applyPlainValues) ignores IDs it doesn't know and never touches IDs the
+// file doesn't mention, so a v0.2.0 preset can only ever leave the new
+// parameters at their defaults - which this pins rather than assumes.
+TEST_CASE ("PresetManager: the nine v0.2.0 factory presets are byte-frozen", "[presets][state][v030]")
+{
+    // FNV-1a (64-bit) over the embedded bytes, recorded from the v0.2.0
+    // files. A mismatch means a supposedly frozen preset was edited.
+    const std::vector<juce::uint64> expectedHashes {
+        0x1a11aa086c0c5149ULL, // Default            (406 bytes)
+        0x0c237549b5593db1ULL, // Clean Push         (411 bytes)
+        0x49151390960fd597ULL, // Classic Boost      (414 bytes)
+        0x49773aabf00646ecULL, // Drop-Tune Tight    (418 bytes)
+        0xd835059549142dd9ULL, // Smooth Push        (378 bytes)
+        0xf5fb8436a321e953ULL, // Own Distortion     (384 bytes)
+        0x486e0fa8f7d97f03ULL, // Fuzz-Adjacent Lead (388 bytes)
+        0x40d2482c3408ef98ULL, // Parallel Grit      (414 bytes)
+        0x6b5bce9136bc368eULL, // De-Fizz Cleanup    (385 bytes)
+    };
+
+    const auto legacyPresets = makeLegacyFactoryPresets();
+    REQUIRE (legacyPresets.size() == expectedHashes.size());
+
+    for (size_t index = 0; index < legacyPresets.size(); ++index)
+    {
+        const auto& preset = legacyPresets[index];
+        REQUIRE (preset.size > 0);
+
+        juce::uint64 hash = 1469598103934665603ULL;
+
+        for (int i = 0; i < preset.size; ++i)
+        {
+            hash ^= static_cast<juce::uint64> (static_cast<unsigned char> (preset.data[i]));
+            hash *= 1099511628211ULL;
+        }
+
+        INFO ("factory preset: " << preset.name << " hash 0x" << juce::String::toHexString (static_cast<juce::int64> (hash)));
+        CHECK (hash == expectedHashes[index]);
+
+        // Every frozen preset must still declare pluginVersion 0.2.0 - the
+        // cheapest possible proof that nobody "refreshed" the file while
+        // adding the v0.3.0 parameters to it.
+        const juce::String text (juce::CharPointer_UTF8 (preset.data), static_cast<size_t> (preset.size));
+        CHECK (text.contains ("\"pluginVersion\": \"0.2.0\""));
+        CHECK_FALSE (text.contains (ParamIDs::gate));
+        CHECK_FALSE (text.contains (ParamIDs::gateThreshold));
+        CHECK_FALSE (text.contains (ParamIDs::gateRelease));
+        CHECK_FALSE (text.contains (ParamIDs::kneeResponse));
+        CHECK_FALSE (text.contains (ParamIDs::clipQuality));
+    }
+}
+
+TEST_CASE ("PresetManager: every v0.2.0 factory preset loads with the v0.3.0 parameters at neutral defaults",
+           "[presets][state][v030]")
+{
+    OvertureAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+
+    ScopedTestDirectory scratch;
+    PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+    // Move every new parameter OFF its default first, so "still at default
+    // after the load" cannot pass by accident.
+    setParam (processor, ParamIDs::gate, 1.0f);
+    setParam (processor, ParamIDs::gateThreshold, -33.0f);
+    setParam (processor, ParamIDs::gateRelease, 2.0f);
+    setParam (processor, ParamIDs::kneeResponse, 1.0f);
+    setParam (processor, ParamIDs::clipQuality, 1.0f);
+
+    for (const auto& preset : makeLegacyFactoryPresets())
+    {
+        INFO ("factory preset: " << preset.name);
+        REQUIRE (manager.loadPreset (preset.name));
+
+        CHECK (processor.apvts.getRawParameterValue (ParamIDs::gate)->load() == 0.0f);
+        CHECK (processor.apvts.getRawParameterValue (ParamIDs::gateThreshold)->load() == -50.0f);
+        CHECK (processor.apvts.getRawParameterValue (ParamIDs::gateRelease)->load() == 0.0f);
+        CHECK (processor.apvts.getRawParameterValue (ParamIDs::kneeResponse)->load() == 0.0f);
+        CHECK (processor.apvts.getRawParameterValue (ParamIDs::clipQuality)->load() == 0.0f);
+    }
+}
+
+TEST_CASE ("PresetManager: the two v0.3.0 factory presets load with their new-parameter values intact",
+           "[presets][state][v030]")
+{
+    OvertureAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+
+    ScopedTestDirectory scratch;
+    PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+    SECTION ("Tight Rhythm Gate: gate on at -45 dB, Auto release, Asymmetric voicing")
+    {
+        REQUIRE (manager.loadPreset ("Tight Rhythm Gate"));
+
+        CHECK (processor.apvts.getRawParameterValue (ParamIDs::gate)->load() == 1.0f);
+        CHECK (processor.apvts.getRawParameterValue (ParamIDs::gateThreshold)->load() == Catch::Approx (-45.0f));
+        CHECK (processor.apvts.getRawParameterValue (ParamIDs::gateRelease)->load() == 0.0f);
+        CHECK (static_cast<int> (processor.apvts.getRawParameterValue (ParamIDs::voicing)->load())
+               == static_cast<int> (ClipperVoicing::asymmetric));
+    }
+
+    SECTION ("Circuit Drive: Feedback voicing, Drive 12 dB, Enhanced clip quality")
+    {
+        REQUIRE (manager.loadPreset ("Circuit Drive"));
+
+        CHECK (static_cast<int> (processor.apvts.getRawParameterValue (ParamIDs::voicing)->load())
+               == static_cast<int> (ClipperVoicing::feedback));
+        CHECK (processor.apvts.getRawParameterValue (ParamIDs::drive)->load() == Catch::Approx (12.0f));
+        CHECK (static_cast<int> (processor.apvts.getRawParameterValue (ParamIDs::clipQuality)->load())
+               == static_cast<int> (ClipQualityMode::enhanced));
+    }
 }

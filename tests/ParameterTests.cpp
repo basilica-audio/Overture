@@ -59,6 +59,9 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
             ParamIDs::tight, ParamIDs::drive, ParamIDs::biteAmount, ParamIDs::kneeSoften,
             ParamIDs::asymmetryAmount, ParamIDs::biteTilt, ParamIDs::level, ParamIDs::mix,
             ParamIDs::bypass, ParamIDs::voicing, ParamIDs::oversampling,
+            // v0.3.0
+            ParamIDs::gate, ParamIDs::gateThreshold, ParamIDs::gateRelease,
+            ParamIDs::kneeResponse, ParamIDs::clipQuality,
         };
 
         for (const auto* id : allIds)
@@ -70,11 +73,13 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
         CHECK (apvts.getParameter (ParamIDs::tone) == nullptr);
     }
 
-    SECTION ("total parameter count matches the v0.2.0 layout")
+    SECTION ("total parameter count matches the v0.3.0 layout")
     {
         // v0.1.0 had 8; v0.2.0 removes `tone` and adds `biteAmount`,
         // `kneeSoften`, `asymmetryAmount`, `biteTilt` -> 8 - 1 + 4 = 11.
-        CHECK (apvts.processor.getParameters().size() == 11);
+        // v0.3.0 adds `gate`, `gateThreshold`, `gateRelease`,
+        // `kneeResponse`, `clipQuality` -> 16.
+        CHECK (apvts.processor.getParameters().size() == 16);
     }
 
     SECTION ("Tight: high-pass pre-emphasis defaults and range (v0.2.0: default 130 -> 100 Hz)")
@@ -132,16 +137,78 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
         CHECK (param->get() == false);
     }
 
-    SECTION ("Voicing: three choices, defaults to Asymmetric, indices frozen")
+    SECTION ("Voicing: four choices as of v0.3.0, defaults to Asymmetric, indices 0-2 frozen")
     {
         auto* param = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::voicing));
         REQUIRE (param != nullptr);
-        CHECK (param->choices.size() == 3);
+        CHECK (param->choices.size() == 4);
         CHECK (param->getIndex() == 0);
         CHECK (param->getCurrentChoiceName() == juce::String ("Asymmetric"));
+        // Indices 0-2 must never move - they are what saved sessions and
+        // presets persist (src/dsp/ClipperVoicing.h's frozen-value contract).
         CHECK (param->choices[0] == juce::String ("Asymmetric"));
         CHECK (param->choices[1] == juce::String ("Soft Symmetric"));
         CHECK (param->choices[2] == juce::String ("Hard Clip"));
+        // Appended in v0.3.0.
+        CHECK (param->choices[3] == juce::String ("Feedback"));
+        CHECK (static_cast<int> (ClipperVoicing::feedback) == 3);
+    }
+
+    //==========================================================================
+    // v0.3.0 parameters. Every default below is the NEUTRAL value: a session
+    // or preset that predates them must restore with the plugin sounding
+    // exactly as it did under v0.2.0 (tests/StateTests.cpp T-S1/T-S2).
+
+    SECTION ("Gate: built-in noise gate defaults to OFF (neutral)")
+    {
+        auto* param = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter (ParamIDs::gate));
+        REQUIRE (param != nullptr);
+        CHECK (param->get() == false);
+    }
+
+    SECTION ("Gate Threshold: defaults and range (new in v0.3.0)")
+    {
+        checkFloatDefault (apvts, ParamIDs::gateThreshold, -50.0f);
+        checkFloatRange (apvts, ParamIDs::gateThreshold, -80.0f, -20.0f);
+    }
+
+    SECTION ("Gate Release: three choices, defaults to Auto (index 0)")
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::gateRelease));
+        REQUIRE (param != nullptr);
+        CHECK (param->choices.size() == 3);
+        CHECK (param->getIndex() == 0);
+        CHECK (param->choices[0] == juce::String ("Auto"));
+        CHECK (param->choices[1] == juce::String ("Fast"));
+        CHECK (param->choices[2] == juce::String ("Slow"));
+        // Indices must line up with basilica::dsp::NoiseGate::ReleaseMode.
+        CHECK (static_cast<int> (basilica::dsp::NoiseGate::ReleaseMode::automatic) == 0);
+        CHECK (static_cast<int> (basilica::dsp::NoiseGate::ReleaseMode::fast) == 1);
+        CHECK (static_cast<int> (basilica::dsp::NoiseGate::ReleaseMode::slow) == 2);
+    }
+
+    SECTION ("Knee Response: two choices, defaults to the legacy Drive proxy (index 0)")
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::kneeResponse));
+        REQUIRE (param != nullptr);
+        CHECK (param->choices.size() == 2);
+        CHECK (param->getIndex() == 0);
+        CHECK (param->choices[0] == juce::String ("Drive"));
+        CHECK (param->choices[1] == juce::String ("Signal"));
+        CHECK (static_cast<int> (KneeResponseMode::drive) == 0);
+        CHECK (static_cast<int> (KneeResponseMode::signal) == 1);
+    }
+
+    SECTION ("Clip Quality: two choices, defaults to the bit-identical Classic path (index 0)")
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::clipQuality));
+        REQUIRE (param != nullptr);
+        CHECK (param->choices.size() == 2);
+        CHECK (param->getIndex() == 0);
+        CHECK (param->choices[0] == juce::String ("Classic"));
+        CHECK (param->choices[1] == juce::String ("Enhanced"));
+        CHECK (static_cast<int> (ClipQualityMode::classic) == 0);
+        CHECK (static_cast<int> (ClipQualityMode::enhanced) == 1);
     }
 
     SECTION ("Oversampling: three choices, defaults to 4x")
