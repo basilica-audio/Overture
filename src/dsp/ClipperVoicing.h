@@ -35,6 +35,17 @@ enum class ClipperVoicing
     // high-order odd harmonics; still run inside the oversampled block so
     // those corners don't alias.
     hardClip = 2,
+
+    // NEW IN v0.3.0. Circuit-solved op-amp/diode feedback clipper: a
+    // trapezoidally-discretised, Newton-solved ODE of the actual feedback
+    // loop rather than a transfer curve (src/dsp/FeedbackClipperStage.h).
+    // Unlike the three voicings above it is NOT a member of the memoryless
+    // family - it has state, its knee and its in-loop lowpass pole move with
+    // Drive, and it therefore does not go through
+    // ClipperVoicings::processSample() below at all; OvertureEngine
+    // dispatches it to FeedbackClipperStage directly. Appended at the end,
+    // never reordered, per this enum's frozen-value contract above.
+    feedback = 3,
 };
 
 // Symmetric (odd, unbiased) tanh soft clipper: y = tanh(x). Recovers the
@@ -72,6 +83,10 @@ namespace ClipperVoicings
         {
             case ClipperVoicing::softSymmetric: return SoftSymmetricClipper::processSample (x);
             case ClipperVoicing::hardClip:      return HardClipper::processSample (x);
+            // ClipperVoicing::feedback is stateful and never reaches this
+            // memoryless dispatch (see the enum's docs); it is listed only
+            // so the switch stays exhaustive for -Wswitch.
+            case ClipperVoicing::feedback:
             case ClipperVoicing::asymmetric:
             default:                             return AsymSoftClipper::processSample (x, asymmetry);
         }

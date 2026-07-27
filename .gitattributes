@@ -1,0 +1,14 @@
+# Normalise every text file to LF in the working tree on all platforms.
+#
+# This is not cosmetic. The factory presets under presets/factory/ are embedded
+# verbatim into the binary by JUCE's BinaryData step and are byte-frozen by
+# "PresetManager: the nine v0.2.0 factory presets are byte-frozen" in
+# tests/PresetManagerTests.cpp. Without this file, Git's default CRLF
+# conversion on Windows checkouts (core.autocrlf=true, which is the GitHub
+# Actions runner default) rewrites every newline before the resources are
+# compiled in, so the shipped bytes - and every hash derived from them -
+# differ between the macOS and Windows builds of the same commit.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png binary

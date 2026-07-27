@@ -2,8 +2,38 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include "AdaaWaveshaper.h"
 #include "AsymSoftClipper.h"
 #include "ClipperVoicing.h"
+#include "DcBlocker.h"
+#include "EnvelopeFollower.h"
+#include "FeedbackClipperStage.h"
+#include "NoiseGate.h"
+
+// How Knee Soften's intensity factor is derived (ParamIDs::kneeResponse).
+// Values are persisted as an AudioParameterChoice index - append only.
+enum class KneeResponseMode
+{
+    // v0.2.0 behaviour: the open-loop lastDriveDb/40 proxy. Bit-identical
+    // to v0.2.0 and therefore the default.
+    drive = 0,
+
+    // v0.3.0: an instant-attack / 30 ms-release peak envelope taken on the
+    // oversampled clipper input.
+    signal = 1,
+};
+
+// Clipper quality for the three memoryless voicings (ParamIDs::clipQuality).
+// Values are persisted as an AudioParameterChoice index - append only.
+enum class ClipQualityMode
+{
+    // The exact v0.2.0 clipper path, bit for bit. Default.
+    classic = 0,
+
+    // First-order antiderivative anti-aliasing (src/dsp/AdaaWaveshaper.h)
+    // plus the 5 Hz DC blocker (src/dsp/DcBlocker.h).
+    enhanced = 1,
+};
 
 // The complete Overture signal path, independent of juce::AudioProcessor
 // so it can be exercised directly by unit tests without instantiating a
@@ -103,8 +133,54 @@ public:
     // because it does NOT reallocate anything itself.
     void setOversamplingFactorPow2 (int newFactorPow2) noexcept;
 
-    // Oversampling latency in samples, valid after prepare() has run.
+    //==========================================================================
+    // v0.3.0 additions. Every setter below defaults to the value that
+    // reproduces v0.2.0 exactly, so an engine that is never told about them
+    // behaves as it always did (tests/EngineTests.cpp's neutrality nulls).
+
+    // Built-in noise gate master switch (src/dsp/NoiseGate.h). While false
+    // the gate is skipped entirely - no detector, no sidechain filters, no
+    // gain multiply - so the wet path is bit-identical to v0.2.0. The
+    // false -> true transition re-seeds the gate's detector so engaging it
+    // mid-performance neither clicks nor mutes the first few milliseconds
+    // of a sustained note.
+    void setGateEnabled (bool shouldBeEnabled) noexcept;
+
+    // Gate opening threshold in dB (mean-square detector reference, so a
+    // full-scale sine reads -3 dB). Smoothed internally over 20 ms.
+    void setGateThresholdDb (float newThresholdDb) noexcept;
+
+    // Gate release behaviour (Auto/Fast/Slow - see
+    // basilica::dsp::NoiseGate::ReleaseMode).
+    void setGateReleaseMode (basilica::dsp::NoiseGate::ReleaseMode newMode) noexcept;
+
+    // Where Knee Soften's intensity factor comes from. Switching modes
+    // pre-seeds the envelope from the current proxy value so the knee does
+    // not step.
+    void setKneeResponseMode (KneeResponseMode newMode) noexcept;
+
+    // Classic (bit-identical v0.2.0 clipper) vs Enhanced (ADAA + DC
+    // blocker) for the three memoryless voicings.
+    void setClipQualityMode (ClipQualityMode newMode) noexcept;
+
+    // Oversampling latency in samples, valid after prepare() has run. The
+    // gate adds zero (no lookahead) and ADAA's half-sample delay is at the
+    // OVERSAMPLED rate and deliberately not reported - see
+    // src/dsp/AdaaWaveshaper.h.
     int getLatencySamples() const noexcept { return latencySamples; }
+
+    // Sub-block size for parameter/coefficient updates, in base-rate
+    // samples. Defaults to 32 (see subBlockSizeDefault). Exposed only so
+    // tests/EngineTests.cpp (T-E1) can measure the v0.3.0 sub-block cadence
+    // against the v0.2.0 block-rate cadence in the same binary - passing a
+    // value >= the host block size reproduces exactly the v0.2.0 "one
+    // coefficient update per block" behaviour. Not driven by any parameter.
+    void setParameterUpdateSubBlockSize (int newSubBlockSize) noexcept;
+
+    // Test/telemetry access to the gate's control path (never read by the
+    // audio path itself) - tests/NoiseGateTests.cpp needs to separate the
+    // detector's own settling from the hold/release timings it asserts.
+    const basilica::dsp::NoiseGate& getNoiseGate() const noexcept { return noiseGate; }
 
 private:
     static constexpr double smoothingTimeSeconds = 0.05;
@@ -256,11 +332,86 @@ private:
     // DryWetMixer's internal buffers were actually sized for (issue #13).
     size_t preparedMaxBlockSize = 0;
 
-    // Runs the full Tight -> Drive -> oversampled Bite/Voicing/Knee Soften
-    // -> Bite Tilt -> Level -> Mix chain in place on a single chunk of at
-    // most preparedMaxBlockSize samples. Called once per chunk by
+    //==========================================================================
+    // v0.3.0 state.
+
+    size_t subBlockSize = subBlockSizeDefault;
+
+    // Built-in noise gate. The detector taps the plugin INPUT (pre-Tight,
+    // pre-Drive - the cleanest signal available in-plugin, analogous to
+    // keying from the instrument); the gain is applied to the wet path
+    // input, before the Tight HPF, so gated noise never reaches the
+    // clipper. The dry path (Mix < 100%) is deliberately ungated - the gate
+    // is part of the wet pedal chain (documented in docs/manual.md).
+    // Stereo linked: the detector sees the max of |x| across channels and
+    // one gain is applied to both.
+    basilica::dsp::NoiseGate noiseGate;
+    bool gateEnabled = false;
+    bool lastGateEnabled = false;
+    float lastGateThresholdDb = -50.0f;
+    basilica::dsp::NoiseGate::ReleaseMode gateReleaseMode = basilica::dsp::NoiseGate::ReleaseMode::automatic;
+
+    // Circuit-solved Feedback voicing (ClipperVoicing::feedback). Runs
+    // INSIDE the oversampler, replacing the Bite-shelf -> memoryless-clipper
+    // path entirely: Bite and Knee Soften have no effect in this voicing
+    // (the circuit's own 720 Hz pre-emphasis IS the bite mechanism and its
+    // knee is physical), and the plain Drive gain stage is forced to 0 dB
+    // because the circuit computes its own 21.5-41.4 dB in-band loop gain.
+    basilica::dsp::FeedbackClipperStage feedbackStage;
+
+    // "Enhanced" clip quality: antiderivative anti-aliasing around the three
+    // memoryless voicings, plus the DC blocker below.
+    basilica::dsp::AdaaWaveshaper adaaWaveshaper;
+    ClipQualityMode clipQualityMode = ClipQualityMode::classic;
+
+    // Post-downsample, pre-Bite-Tilt. Active when clipQuality is Enhanced
+    // OR the Feedback voicing is selected.
+    basilica::dsp::DcBlocker dcBlocker;
+
+    // "Signal" knee response: an instant-attack / 30 ms-release peak
+    // follower on the OVERSAMPLED clipper input (one per channel).
+    basilica::dsp::MultiChannelPeakFollower kneeEnvelope;
+    KneeResponseMode kneeResponseMode = KneeResponseMode::drive;
+
+    // Peak-follower release time constant for the Signal knee response.
+    static constexpr double kneeEnvelopeReleaseSeconds = 0.030;
+
+    // Coefficient-update gating (see subBlockSizeDefault): the smoothed
+    // values the currently-loaded filter coefficients were derived from.
+    // Initialised to an impossible sentinel in prepare() so the first
+    // sub-block after every prepare() always recomputes - that is what keeps
+    // the running coefficients on the ArrayCoefficients path rather than on
+    // prepare()'s (ULP-different) allocating IIR::Coefficients priming.
+    float lastAppliedTightHz = -1.0f;
+    float lastAppliedBiteAmountPercent = -1.0f;
+    float lastAppliedBiteTiltPercent = -1.0e9f;
+
+    // Recompute thresholds. Small enough to be inaudible, large enough that
+    // a settled smoother (delta exactly 0) never re-derives coefficients -
+    // which is what preserves v0.2.0's steady-state bit-identity.
+    static constexpr float coefficientEpsilonHz = 1.0e-4f;
+    static constexpr float coefficientEpsilonPercent = 1.0e-4f;
+
+    // v0.3.0: parameter/coefficient update cadence. v0.2.0 recomputed the
+    // Tight HPF, Bite shelf and Bite Tilt coefficients exactly once per host
+    // block (~86 Hz at 512 samples/48 kHz), which is audible as zipper noise
+    // when Bite Tilt or Tight is automated. Splitting the base-rate work
+    // into 32-sample sub-blocks raises that cadence to 1.5 kHz at the same
+    // sample rate, at the cost of one extra oversampler up/down call per
+    // sub-block - the IIR paths are block-size invariant, so the split is
+    // bit-transparent (asserted in tests/EngineTests.cpp).
+    static constexpr size_t subBlockSizeDefault = 32;
+
+    // Runs the full Gate -> Tight -> Drive -> oversampled Bite/Voicing/Knee
+    // Soften -> DC blocker -> Bite Tilt -> Level -> Mix chain in place on a
+    // single chunk of at most preparedMaxBlockSize samples, splitting it
+    // into sub-blocks (see subBlockSizeDefault). Called once per chunk by
     // process(), which is what performs the size-based splitting.
     void processChunk (juce::dsp::AudioBlock<float>& block);
+
+    // One sub-block of the chain above. All parameter smoothing, coefficient
+    // recomputation and mode dispatch happens here.
+    void processSubBlock (juce::dsp::AudioBlock<float>& block);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvertureEngine)
 };

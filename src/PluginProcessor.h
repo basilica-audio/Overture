@@ -58,6 +58,21 @@ public:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    // Version of the APVTS state layout written by getStateInformation(),
+    // stored as a "stateSchema" attribute on the saved XML's root element.
+    //
+    //   (absent)          v0.1.0 if a "tone" PARAM node is present,
+    //                     v0.2.0 otherwise
+    //   "3"               v0.3.0 (five new parameters, all neutral by
+    //                     default, so no value rewriting is needed on load -
+    //                     the attribute exists so future migrations can
+    //                     branch on it deterministically instead of
+    //                     sniffing for the presence of individual params)
+    //
+    // See setStateInformation() and tests/StateTests.cpp (T-S1/T-S4).
+    static constexpr const char* stateSchemaAttribute = "stateSchema";
+    static constexpr int currentStateSchemaVersion = 3;
+
     juce::AudioProcessorValueTreeState apvts;
 
     // M2 preset system (.scaffold/specs/preset-system-m2.md,
@@ -85,6 +100,16 @@ private:
     std::atomic<float>* bypassFlag = nullptr;
     std::atomic<float>* voicingChoice = nullptr;
     std::atomic<float>* oversamplingChoice = nullptr;
+
+    // v0.3.0 additions (see src/params/ParameterIds.h). All default to
+    // neutral values, so a v0.2.0 session - whose saved XML carries none of
+    // these PARAM nodes at all - restores with the gate off, Classic clip
+    // quality and the legacy Drive knee response, i.e. bit-identical audio.
+    std::atomic<float>* gateFlag = nullptr;
+    std::atomic<float>* gateThresholdDb = nullptr;
+    std::atomic<float>* gateReleaseChoice = nullptr;
+    std::atomic<float>* kneeResponseChoice = nullptr;
+    std::atomic<float>* clipQualityChoice = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvertureAudioProcessor)
 };

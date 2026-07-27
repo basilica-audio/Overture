@@ -1,26 +1,117 @@
 # Architecture
 
-## Signal flow (v0.2.0)
+## Signal flow (v0.3.0)
 
 ```mermaid
 flowchart LR
-    IN[Input] --> HPF[Tight<br/>HPF, 20-400 Hz]
-    HPF --> DRIVE[Drive<br/>0-40 dB]
+    IN[Input] --> GATE[Noise Gate<br/>optional, per-sample<br/>zero latency]
+    GATE --> HPF[Tight<br/>HPF, 20-400 Hz]
+    HPF --> DRIVE[Drive<br/>0-40 dB<br/>forced 0 dB for Feedback]
     DRIVE --> UP[Nx Oversample<br/>2x/4x/8x]
     UP --> BITE[Bite shelf<br/>~700 Hz, INSIDE the<br/>drive-to-clipper path]
-    BITE --> CLIP[Voicing clipper<br/>variable Asymmetry]
-    CLIP --> KNEE[Knee Soften blend<br/>drive-dependent]
+    BITE --> CLIP[Voicing clipper<br/>variable Asymmetry<br/>optional ADAA]
+    CLIP --> KNEE[Knee Soften blend<br/>Drive proxy or signal envelope]
+    UP --> FB[Feedback circuit solver<br/>trapezoidal + Newton<br/>replaces Bite/clipper/knee]
     KNEE --> DOWN[Nx Downsample]
-    DOWN --> TILT[Bite Tilt<br/>+/-3 kHz shelf]
+    FB --> DOWN
+    DOWN --> DC[DC blocker, 5 Hz<br/>Enhanced or Feedback]
+    DC --> TILT[Bite Tilt<br/>+/-3 kHz shelf]
     TILT --> LEVEL[Level<br/>output trim]
     LEVEL --> MIX[Dry/Wet Mix]
-    IN -.->|delay-compensated dry path| MIX
+    IN -.->|delay-compensated dry path, UNGATED| MIX
     MIX --> OUT[Output]
 ```
 
 Everything from the Tight HPF through Level is the "wet" path, owned by `OvertureEngine` (`src/dsp/OvertureEngine.{h,cpp}`). The dry path is the untouched input signal, delayed to stay time-aligned with the wet path (see [Latency and oversampling](#latency-and-oversampling) below), then blended in at the Mix stage via `juce::dsp::DryWetMixer`. **Bypass** (`ParamIDs::bypass`) reuses this exact same path: `OvertureAudioProcessor::processBlock()` forces the *effective* Mix proportion fed to the engine to 0% while bypassed (regardless of the user's actual Mix setting), rather than skipping `OvertureEngine::process()` altogether - see [Bypass](#bypass) below.
 
-This is the same v0.1 oversampling/latency/dry-wet architecture unchanged - v0.2.0 (`docs/design-brief.md`) only changes what happens *inside* Drive -> Clipper -> Tone, not the surrounding real-time-safety contract.
+This is the same v0.1 oversampling/latency/dry-wet architecture unchanged - v0.2.0 (`docs/design-brief.md`) only changes what happens *inside* Drive -> Clipper -> Tone, not the surrounding real-time-safety contract. v0.3.0 adds stages at both ends of that section (the gate in front, the DC blocker behind) and one alternative path through it (the Feedback voicing), again without touching the latency/dry-wet contract: reported latency is unchanged at every oversampling factor.
+
+### Noise gate (new in v0.3.0)
+
+`src/dsp/NoiseGate.h`, gated behind `ParamIDs::gate`. Placement is deliberate and load-bearing:
+
+- The **detector taps the plugin input** - before Tight, before Drive. That is the cleanest signal available inside the plugin and the closest in-plugin analogue to keying a hardware gate from the instrument, so the threshold means the same thing regardless of how Tight and Drive are set.
+- The **gain is applied to the wet path input**, before the Tight HPF, so gated noise never reaches the clipper at all rather than being clipped and then attenuated.
+- The **dry path is ungated**. `dryWetMixer.pushDrySamples()` runs *before* the gate, so a Mix below 100% still passes the untreated input. The gate belongs to the wet pedal chain; this is documented in `docs/manual.md` because it is a real, user-visible consequence.
+- **Stereo linked**: one detector fed by the max of |x| across channels, one gain applied to both, so the image cannot wander as the gate works.
+
+The control path runs **per sample**, in the log/dB domain (the placement Giannoulis, Massberg & Reiss, JAES 60(6) 2012 recommend for log-domain dynamics): a 5 ms exponential mean-square detector behind a fixed 100 Hz/5 kHz TPT-SVF sidechain pair, then a non-linear-capacitor smoother whose effective time constant collapses from 30 ms to 2 ms as the level step grows past a 1.5 dB knee, then a hysteresis/hold state machine, then the gain ramps. A block-rate control path chatters; this one does not.
+
+Two properties are worth calling out because they are what the tests actually pin down (`tests/NoiseGateTests.cpp`):
+
+- The **closing ramp is dB-linear** (`g[n] = max(g[n-1] - S/fs, -M)`), the VCA/THAT-DN100 signature, not the exponential-in-linear-gain ramp most digital gates use. T-G4 line-fits `20*log10(gain)` and demands `R^2 > 0.99`, which an exponential release could not pass at the same endpoints.
+- The **auto release is program-dependent**: a fast and a slow envelope run on the detector output, and when the slow one gets more than 4 dB above the fast one the note has stopped abruptly, so the slow envelope is dumped and the gate releases at 1000 dB/s; otherwise it releases at the note's own measured decay rate plus 15 dB/s of margin. T-G6 checks both halves with the same settings and different programme material.
+
+Zero added latency: there is no lookahead in v0.3.0 (deferred - it would make reported latency a function of a parameter, which needs a settled suite-wide latency-renegotiation pattern first).
+
+### Feedback voicing: a circuit solver, not a curve (new in v0.3.0)
+
+`src/dsp/FeedbackClipperStage.h`, selected by `ClipperVoicing::feedback` (index 3, appended - 0-2 frozen). It replaces the Bite-shelf -> memoryless-clipper -> Knee-Soften section entirely while it is selected, and runs inside the same oversampler.
+
+The stage integrates
+
+```
+dV/dt = In/Cc - V/(R2*Cc) - iD(V)/Cc,   In(s) = Vi * s / (R1*(s + wz))
+```
+
+by the trapezoidal rule, solving the resulting implicit equation per sample with a safeguarded Newton iteration, and outputs `Vo = Vi + V`. What that buys over a waveshaper is **memory**: the 51 pF feedback capacitor puts a drive-dependent lowpass pole *inside* the nonlinearity (~61 kHz at Drive 0, ~5.7 kHz at Drive max), so the stage's gain, its knee and its high-frequency rounding move together with the signal and with Drive. No memoryless transfer curve reproduces that at any oversampling factor.
+
+Consequences that are deliberate, not omissions:
+
+- **Drive maps to the feedback resistance** `R2 = 51k + D*500k`, smoothed multiplicatively in the resistance domain, and the plain pre-clipper Drive gain is forced to 0 dB - the circuit computes its own 21.5-41.4 dB of in-band loop gain.
+- **Bite and Knee Soften are inert.** The circuit's own 720 Hz pre-emphasis *is* the bite mechanism and its knee is physical. `tests/EngineTests.cpp` T-E2 asserts this bit-exactly rather than documenting it.
+- **The DC blocker is always on** for this voicing (the asymmetry-morphable diode law produces programme-dependent DC).
+- **Calibration is pinned in the small-signal regime.** `V_SCALE = 2.0 V` per full scale, so -12 dBFS is 0.5 V; with ~21.5 dB of minimum in-band gain into a ~0.4 V knee, the linear region at Drive 0 ends around -40...-35 dBFS. This voicing is a touch-sensitive **programme-level** clipper by design, and `tests/FeedbackClipperTests.cpp` T-F1 asserts both halves of that: THD < 0.1% at -60 dBFS, and THD > 10% at -12 dBFS with golden-matched harmonics. A "clean at -12 dBFS" result would mean a broken solver or a mis-scaled `V_SCALE`, and fails.
+
+The solver's bracket is diode-aware - `min(p/(1+a), mf*n*VT*ln(1 + p/(R2*Is)))` rather than the linear bound alone - which is what keeps the iteration inside the physically reachable +/-0.7 V and lets the 8-iteration cap be hard rather than best-effort. `g` is strictly monotone, so the bisection fallback is guaranteed to terminate.
+
+### Enhanced clip quality: ADAA + DC blocker (new in v0.3.0)
+
+`src/dsp/AdaaWaveshaper.h` and `src/dsp/DcBlocker.h`, behind `ParamIDs::clipQuality`. First-order antiderivative anti-aliasing (Parker, Zavalishin & Le Bivic, DAFx-16) convolves each memoryless voicing with a one-sample box kernel analytically:
+
+```
+y~(n) = (F(u(n)) - F(u(n-1))) / (u(n) - u(n-1)),   F' = f
+```
+
+falling back to the midpoint evaluation `f((u(n)+u(n-1))/2)` where the denominator collapses, guarded by an input-scaled epsilon. Closed-form antiderivatives are used for all three voicings, with an overflow-safe large-|x| branch for `ln(cosh)`.
+
+This header **wraps** the voicing functions and never edits them: `Classic` still calls `ClipperVoicings::processSample()` directly and remains bit-identical to v0.2.0. Two documented side effects, neither reported as latency: a half-sample group delay *at the oversampled rate*, and a mild `(1 + z^-1)/2` HF droop, also at the oversampled rate.
+
+Measured (`tests/AdaaTests.cpp` T-A1, bin-centred 1245 Hz into Hard Clip at 0 dBFS/Drive 40): alias energy of -23.8 dBFS (Classic 2x) vs -42.5 dBFS (Enhanced 2x), and -33.2 vs -57.0 dBFS at 4x. Enhanced at 2x beats Classic at 4x.
+
+### Sub-block parameter updates (new in v0.3.0)
+
+`OvertureEngine::processChunk()` now splits each chunk into 32-sample sub-blocks and runs the whole base-rate chain per sub-block (`processSubBlock()`), raising the coefficient-update cadence from ~86 Hz to ~1.5 kHz at 48 kHz/512. Two details make this safe:
+
+- Every stage it touches - the IIR filters, the polyphase oversampler, the `DryWetMixer` delay line, `juce::dsp::Gain` - is block-size invariant, so splitting the work cannot change the output on its own. `tests/EngineTests.cpp` asserts that a settled engine produces bit-identical output at host block sizes of 64, 128, 37 and 511.
+- A coefficient is only re-derived when its smoothed value has actually moved (epsilon compare), so a settled parameter never re-enters the `ArrayCoefficients` path and the steady-state output stays bit-identical to v0.2.0. `prepare()` deliberately resets the "last applied" trackers to an impossible sentinel, because `prepare()`'s own priming uses the *allocating* `IIR::Coefficients` factory whose result can differ by an ULP from the `ArrayCoefficients` path the running engine uses - v0.2.0 always landed on the latter from the first block, and so must v0.3.0.
+
+### Frozen non-parameter constants (v0.3.0)
+
+These are hardware-derived or circuit-derived values, not user controls. Nothing persists them, so they can be re-tuned pre-release without any state-schema impact.
+
+| Constant | Value | Where |
+|---|---|---|
+| Gate hysteresis `H` | 4 dB | `NoiseGate::hysteresisDb` |
+| Gate hold | 20 ms, retriggering | `NoiseGate::holdSeconds` |
+| Gate range/floor `M` | 90 dB | `NoiseGate::rangeDb` |
+| Gate attack `tau` | 0.1 ms | `NoiseGate::attackTauSeconds` |
+| Gate detector `tau` | 5 ms (mean square) | `NoiseGate::detectorTauSeconds` |
+| NLC smoother | 2 ms / 30 ms, 1.5 dB knee | `NoiseGate::nlcTau*`, `nlcKneeDb` |
+| Sidechain filters | 100 Hz HPF, 5 kHz LPF, 2nd order | `NoiseGate::sidechain*Hz` |
+| TVP window / slopes | 4 dB; 1000 dB/s fast, decay + 15 dB/s tracked | `NoiseGate::tvp*` |
+| Fixed release slopes | 800 dB/s (Fast), 60 dB/s (Slow) | `NoiseGate::fastSlopeDbPerSecond`, `slowSlopeDbPerSecond` |
+| Gate seed grace | 30 ms | `NoiseGate::seedGraceSeconds` |
+| Feedback circuit | R1 4.7k, Cz 47n, Cc 51p, R2 51k + D*500k, Is 2.52n, n 1.75, VT 25.85m | `FeedbackClipperStage` |
+| Voltage calibration | `V_SCALE` 2.0 V per full scale | `FeedbackClipperStage::voltageScale` |
+| Feedback output trim | 0 dB | `FeedbackClipperStage::outputTrimDb` |
+| DC blocker corner | 5 Hz | `DcBlocker::cornerHz` |
+| Knee envelope release | 30 ms (at the oversampled rate) | `OvertureEngine::kneeEnvelopeReleaseSeconds` |
+| Sub-block size | 32 base-rate samples | `OvertureEngine::subBlockSizeDefault` |
+
+### State schema
+
+`getStateInformation()` stamps a `stateSchema` attribute on the saved XML root; v0.3.0 writes `"3"`. Absence of the attribute means v0.1 (if a `tone` PARAM node is present) or v0.2 (otherwise). **No value rewriting happens for v2 -> v3**: every v0.3.0 parameter's default *is* the v0.2.0-equivalent neutral value, and APVTS already ignores unknown PARAM nodes and falls back to defaults for missing ones. The attribute exists so a future migration can branch on an explicit version instead of sniffing for individual parameters. `tests/StateTests.cpp` T-S1/T-S2 assert both halves: the defaults are neutral, and an engine restored from v0.2.0-shaped state is bit-identical to an explicitly configured one.
 
 ### Bite: frequency-dependent gain inside the drive-to-clipper path (new in v0.2.0)
 
@@ -72,7 +163,7 @@ One JUCE 8.0.14-specific detail worth calling out: `juce::dsp::Oversampling` wit
 
 | Directory | Responsibility |
 |---|---|
-| `src/dsp` | All audio-thread DSP: `AsymSoftClipper`/`ClipperVoicing` (the stateless nonlinearities and the `ClipperVoicing` enum/dispatch, unchanged from v0.1), `KneeSoftening` (new in v0.2.0 - the stateless knee-rounding blend function), `RealtimeCoefficients` (allocation-free biquad coefficient writes, `ovtr::applyBiquadCoefficients`), and `OvertureEngine` (the full signal chain). No allocation, locks, or I/O once `prepare()` has run. Independent of `juce::AudioProcessor` so it is directly unit-testable (see `tests/EngineTests.cpp`, `tests/AsymSoftClipperTests.cpp`, `tests/ClipperVoicingTests.cpp`, `tests/KneeSofteningTests.cpp`). |
+| `src/dsp` | All audio-thread DSP: `AsymSoftClipper`/`ClipperVoicing` (the stateless nonlinearities and the `ClipperVoicing` enum/dispatch, unchanged from v0.1 apart from the appended `feedback` value), `KneeSoftening` (v0.2.0 - the stateless knee-rounding blend function), `RealtimeCoefficients` (allocation-free biquad coefficient writes, `ovtr::applyBiquadCoefficients`), and - new in v0.3.0 - `EnvelopeFollower` (shared peak/mean-square followers), `NoiseGate` (detector, sidechain SVFs, state machine, TVP release), `FeedbackClipperStage` (the trapezoidal/Newton circuit solver), `AdaaWaveshaper` (first-order ADAA around the memoryless voicings) and `DcBlocker`, plus `OvertureEngine` (the full signal chain). No allocation, locks, or I/O once `prepare()` has run. Independent of `juce::AudioProcessor` so it is directly unit-testable (see `tests/EngineTests.cpp`, `tests/AsymSoftClipperTests.cpp`, `tests/ClipperVoicingTests.cpp`, `tests/KneeSofteningTests.cpp`). |
 | `src/params` | Parameter layout and `AudioProcessorValueTreeState` definitions - parameter IDs, ranges, defaults. Single source of truth for what a preset captures. |
 | `src/presets` | M2 preset system (`.scaffold/specs/preset-system-m2.md`): `PresetManager` (factory/user preset discovery, load/save/import/export, dirty tracking, default resolution) and `PresetBar` (the editor strip), plus `Localisation` (the M2 i18n frame, `resources/i18n/de.txt`). Copied verbatim from the Nave pilot implementation - see `docs/design-brief.md`. |
 | `src/PluginProcessor.*` | Host plumbing: APVTS construction, `prepareToPlay`/`processBlock`/`reset`, latency reporting, state save/load (including the v0.1 `tone` -> v0.2.0 `biteTilt` migration), `getBypassParameter()`, `PresetManager` construction/wiring. Reads APVTS values and pushes them into `OvertureEngine` every block; does not implement any DSP itself. |
