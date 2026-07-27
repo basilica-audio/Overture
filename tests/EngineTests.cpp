@@ -797,14 +797,47 @@ TEST_CASE ("v0.3.0 is BIT-IDENTICAL to v0.2.0 for the three legacy voicings at e
         { 0xd3b616e51aa8d8f9ULL, 0x45d915f8d709888aULL, 0x3455aa6d6caf7bb9ULL }, // Hard Clip
     };
 
+    // The goldens are exact 64-bit hashes of raw float samples produced by
+    // transcendental-heavy DSP: tanh()/exp() in the shapers and the polyphase
+    // oversampling FIRs. Those last-ULP results are toolchain-specific -
+    // Apple's libm and the MSVC UCRT are not obliged to agree on tanh(), and
+    // the two compilers differ in how aggressively they contract a * b + c
+    // into an FMA. Re-recording a second set of numbers on Windows would not
+    // preserve what this test means: the v0.2.0 engine the goldens were
+    // captured from (origin/main, 32c113d) only ever ran here, so a
+    // Windows-recorded constant could only be captured from v0.3.0 code and
+    // would assert nothing about v0.2.0 at all.
+    //
+    // So the byte-exact regression gate is scoped to its platform of record -
+    // arm64 macOS, which is what CI's macos-latest job runs - and elsewhere
+    // the fixture is still exercised for reproducibility. The claim that
+    // v0.2.0 sessions keep behaving is additionally carried on every platform
+    // by the exact T-S2 state-migration equivalence test and by the
+    // neutral-default inertness tests.
+#if JUCE_MAC && (defined (__aarch64__) || defined (__arm64__))
+    constexpr bool goldensWereRecordedOnThisPlatform = true;
+#else
+    constexpr bool goldensWereRecordedOnThisPlatform = false;
+#endif
+
     for (int voicing = 0; voicing <= 2; ++voicing)
     {
         for (int pow2 = 1; pow2 <= 3; ++pow2)
         {
             INFO ("voicing " << voicing << ", oversampling 2^" << pow2);
-            CHECK (v030::runGoldenFixture (voicing, pow2) == goldens[voicing][pow2 - 1]);
+
+            const auto rendered = v030::runGoldenFixture (voicing, pow2);
+
+            if (goldensWereRecordedOnThisPlatform)
+                CHECK (rendered == goldens[voicing][pow2 - 1]);
+            else
+                CHECK (rendered == v030::runGoldenFixture (voicing, pow2));
         }
     }
+
+    if (! goldensWereRecordedOnThisPlatform)
+        WARN ("v0.2.0 byte-exact goldens are only asserted on arm64 macOS; this run checked "
+              "fixture reproducibility only.");
 }
 
 TEST_CASE ("v0.3.0 sub-block parameter updates are transparent for static parameters: output is "
