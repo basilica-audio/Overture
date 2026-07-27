@@ -49,7 +49,31 @@ namespace
             { BinaryData::fuzzAdjacentLead_json, BinaryData::fuzzAdjacentLead_jsonSize },
             { BinaryData::parallelGrit_json, BinaryData::parallelGrit_jsonSize },
             { BinaryData::deFizzCleanup_json, BinaryData::deFizzCleanup_jsonSize },
+            { BinaryData::tightRhythmGate_json, BinaryData::tightRhythmGate_jsonSize },
+            { BinaryData::circuitDrive_json, BinaryData::circuitDrive_jsonSize },
         };
+    }
+}
+
+namespace
+{
+    // The v0.3.0 parameter push shared by prepareToPlay() and processBlock().
+    // Kept in one place so the engine can never be prepared with one set of
+    // modes and then processed with another (the Feedback voicing and the
+    // gate both carry state that is seeded at prepare time).
+    void pushV3Parameters (OvertureEngine& engine,
+                           float gateOn,
+                           float thresholdDb,
+                           float releaseChoice,
+                           float kneeResponse,
+                           float clipQuality)
+    {
+        engine.setGateEnabled (gateOn >= 0.5f);
+        engine.setGateThresholdDb (thresholdDb);
+        engine.setGateReleaseMode (static_cast<basilica::dsp::NoiseGate::ReleaseMode> (
+            juce::jlimit (0, 2, static_cast<int> (releaseChoice))));
+        engine.setKneeResponseMode (static_cast<KneeResponseMode> (juce::jlimit (0, 1, static_cast<int> (kneeResponse))));
+        engine.setClipQualityMode (static_cast<ClipQualityMode> (juce::jlimit (0, 1, static_cast<int> (clipQuality))));
     }
 }
 
@@ -72,6 +96,11 @@ OvertureAudioProcessor::OvertureAudioProcessor()
     bypassFlag = apvts.getRawParameterValue (ParamIDs::bypass);
     voicingChoice = apvts.getRawParameterValue (ParamIDs::voicing);
     oversamplingChoice = apvts.getRawParameterValue (ParamIDs::oversampling);
+    gateFlag = apvts.getRawParameterValue (ParamIDs::gate);
+    gateThresholdDb = apvts.getRawParameterValue (ParamIDs::gateThreshold);
+    gateReleaseChoice = apvts.getRawParameterValue (ParamIDs::gateRelease);
+    kneeResponseChoice = apvts.getRawParameterValue (ParamIDs::kneeResponse);
+    clipQualityChoice = apvts.getRawParameterValue (ParamIDs::clipQuality);
 
     jassert (tightHz != nullptr);
     jassert (driveDb != nullptr);
@@ -84,6 +113,11 @@ OvertureAudioProcessor::OvertureAudioProcessor()
     jassert (bypassFlag != nullptr);
     jassert (voicingChoice != nullptr);
     jassert (oversamplingChoice != nullptr);
+    jassert (gateFlag != nullptr);
+    jassert (gateThresholdDb != nullptr);
+    jassert (gateReleaseChoice != nullptr);
+    jassert (kneeResponseChoice != nullptr);
+    jassert (clipQualityChoice != nullptr);
 
     // M2 default resolution: user "Default" preset > factory "Default"
     // preset (there isn't one here - see docs/presets.md) > the
@@ -171,6 +205,13 @@ void OvertureAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     engine.setMixProportion (mixPercent->load (std::memory_order_relaxed) * 0.01f);
     engine.setClipperVoicing (static_cast<ClipperVoicing> (static_cast<int> (voicingChoice->load (std::memory_order_relaxed))));
 
+    pushV3Parameters (engine,
+                      gateFlag->load (std::memory_order_relaxed),
+                      gateThresholdDb->load (std::memory_order_relaxed),
+                      gateReleaseChoice->load (std::memory_order_relaxed),
+                      kneeResponseChoice->load (std::memory_order_relaxed),
+                      clipQualityChoice->load (std::memory_order_relaxed));
+
     // Oversampling factor: reconstructing the internal juce::dsp::Oversampling
     // instance allocates, so it is only ever (re)constructed here, inside
     // engine.prepare() below - never from processBlock(). This means a
@@ -236,6 +277,13 @@ void OvertureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     engine.setLevelDb (levelDb->load (std::memory_order_relaxed));
     engine.setClipperVoicing (static_cast<ClipperVoicing> (static_cast<int> (voicingChoice->load (std::memory_order_relaxed))));
 
+    pushV3Parameters (engine,
+                      gateFlag->load (std::memory_order_relaxed),
+                      gateThresholdDb->load (std::memory_order_relaxed),
+                      gateReleaseChoice->load (std::memory_order_relaxed),
+                      kneeResponseChoice->load (std::memory_order_relaxed),
+                      clipQualityChoice->load (std::memory_order_relaxed));
+
     // Soft bypass: force the wet chain's effective mix to 0% instead of
     // skipping engine.process() outright, so the oversampler keeps running
     // and the plugin's reported latency (host PDC) stays valid and
@@ -271,6 +319,14 @@ void OvertureAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     const auto state = apvts.copyState();
     const std::unique_ptr<juce::XmlElement> xml (state.createXml());
+
+    // Stamp the state-schema version (see PluginProcessor.h). v0.3.0 needs
+    // no value rewriting on load - every new parameter's default IS the
+    // neutral, v0.2.0-equivalent value - so this attribute exists purely so
+    // a future migration can branch on an explicit version instead of
+    // sniffing for individual PARAM nodes.
+    xml->setAttribute (stateSchemaAttribute, juce::String (currentStateSchemaVersion));
+
     copyXmlToBinary (*xml, destData);
 }
 

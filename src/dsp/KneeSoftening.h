@@ -31,8 +31,28 @@
 // Drive-invariant fixed-knee behaviour exactly (see
 // tests/ClipperVoicingTests.cpp's knee-softening backward-compatibility and
 // drive-dependence tests).
+// v0.3.0 addendum: `driveIntensity01` (the second factor in blendAmount01)
+// is no longer necessarily the open-loop `lastDriveDb/40` proxy. With
+// ParamIDs::kneeResponse = "Signal" the engine instead derives it from an
+// instant-attack / 30 ms-release peak envelope taken on the OVERSAMPLED
+// clipper input, so a quiet passage at Drive 40 gets a hard knee and a
+// slammed input gets the soft one - the circuit behaviour the open-loop
+// proxy could only approximate. The math below is unchanged; only where the
+// intensity comes from moved (see KneeSoftening::intensityFromDriveDb() and
+// OvertureEngine::processSubBlock()).
 namespace KneeSoftening
 {
+    // The legacy (v0.2.0) open-loop intensity proxy, factored out of
+    // OvertureEngine so both knee-response modes read from one definition
+    // and the "Drive" mode stays provably identical to v0.2.0.
+    // `referenceDriveDb` is the top of Drive's own range (40 dB), so the
+    // proxy reaches 1.0 exactly at maximum Drive.
+    inline float intensityFromDriveDb (float driveDb, float referenceDriveDb) noexcept
+    {
+        const auto normalised = referenceDriveDb > 0.0f ? driveDb / referenceDriveDb : 0.0f;
+        return normalised < 0.0f ? 0.0f : (normalised > 1.0f ? 1.0f : normalised);
+    }
+
     // `blendAmount01` is expected to be clamped to [0, 1] by the caller
     // (OvertureEngine::processChunk() derives it from two already-clamped
     // 0-1 quantities, so no further clamping happens here). At

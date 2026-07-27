@@ -1,0 +1,23 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.overture",
+    "pluginVersion": "0.3.0",
+    "name": "Tight Rhythm Gate",
+    "category": "Guitar",
+    "parameters": {
+        "tight": 180.0,
+        "drive": 4.0,
+        "voicing": 0,
+        "biteAmount": 80.0,
+        "kneeSoften": 30.0,
+        "asymmetryAmount": 40.0,
+        "biteTilt": -5.0,
+        "level": 0.0,
+        "mix": 100.0,
+        "gate": 1,
+        "gateThreshold": -45.0,
+        "gateRelease": 0,
+        "kneeResponse": 1,
+        "clipQuality": 1
+    }
+}

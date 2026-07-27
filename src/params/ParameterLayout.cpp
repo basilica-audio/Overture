@@ -152,10 +152,27 @@ namespace tbst
         // Voicing: selects the clipper nonlinearity (src/dsp/ClipperVoicing.h).
         // Default index 0 (Asymmetric) matches the original v0.1 behaviour.
         // Enum indices are FROZEN - see ClipperVoicing.h.
+        //
+        // v0.3.0 APPENDS a fourth entry, "Feedback" (index 3): the
+        // circuit-solved op-amp/diode feedback clipper
+        // (src/dsp/FeedbackClipperStage.h). Indices 0-2 are untouched, so
+        // saved sessions and presets - which persist the denormalised choice
+        // INDEX, not a normalised float - keep selecting exactly the voicing
+        // they always did. A pre-existing host AUTOMATION lane, which does
+        // record normalised values, is the one documented exception: a lane
+        // holding 1.0 used to mean "Hard Clip" (2 of 2) and now means
+        // "Feedback" (3 of 3). Voicing is a discrete configuration control
+        // rather than a performance control, and CHANGELOG.md carries the
+        // compatibility note - see the v0.3.0 brief SS7 R1.
+        //
+        // The v0.2 editor builds its combo items from
+        // AudioParameterChoice::getAllValueStrings(), so this fourth entry
+        // appears on screen with no editor change at all (v0.3.0 ships zero
+        // PluginEditor edits - the M3 photoreal GUI branch owns those).
         layout.add (std::make_unique<juce::AudioParameterChoice> (
             juce::ParameterID { ParamIDs::voicing, 1 },
             "Voicing",
-            juce::StringArray { "Asymmetric", "Soft Symmetric", "Hard Clip" },
+            juce::StringArray { "Asymmetric", "Soft Symmetric", "Hard Clip", "Feedback" },
             0));
 
         //======================================================================
@@ -168,6 +185,80 @@ namespace tbst
             "Oversampling",
             juce::StringArray { "2x", "4x", "8x" },
             1));
+
+        //======================================================================
+        // v0.3.0 additions. EVERY default below is neutral, i.e. chosen so
+        // that a project saved with v0.2.0 - which carries none of these
+        // PARAM nodes and therefore gets the defaults - produces
+        // bit-identical audio (tests/StateTests.cpp T-S1/T-S2).
+
+        //======================================================================
+        // Gate: the built-in noise gate's master on/off (new in v0.3.0 - see
+        // src/dsp/NoiseGate.h and docs/manual.md). Default OFF: the entire
+        // gate - detector, sidechain filters and gain stage - is skipped
+        // while this is false, so the v0.2.0 signal path is untouched rather
+        // than merely multiplied by unity.
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::gate, 1 },
+            "Gate",
+            false));
+
+        //======================================================================
+        // Gate Threshold: the opening threshold, -80..-20 dB. The gate's
+        // detector is a 5 ms mean-square follower, so a full-scale sine
+        // reads -3 dB and a typical high-output DI's noise floor sits around
+        // -60..-45 dB. Default -50 dB is below any realistic playing level
+        // (so the gate is inaudible even if switched on blind) while still
+        // above a hot single-coil's hum. The closing threshold tracks 4 dB
+        // below this (NoiseGate::hysteresisDb).
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::gateThreshold, 1 },
+            "Gate Threshold",
+            juce::NormalisableRange<float> (-80.0f, -20.0f, 0.1f),
+            -50.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+        //======================================================================
+        // Gate Release: Auto (index 0, default) runs the program-dependent
+        // dual-envelope release - a staccato mute closes the gate at
+        // 1000 dB/s while a ringing chord is released at its own measured
+        // decay rate, so one setting covers both. Fast/Slow are the fixed
+        // 800 / 60 dB/s escape hatches. Order matches
+        // NoiseGate::ReleaseMode.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::gateRelease, 1 },
+            "Gate Release",
+            juce::StringArray { "Auto", "Fast", "Slow" },
+            0));
+
+        //======================================================================
+        // Knee Response: where Knee Soften's intensity comes from. "Drive"
+        // (index 0, default) is v0.2.0's open-loop lastDriveDb/40 proxy and
+        // is bit-identical to it; "Signal" derives the intensity from an
+        // envelope follower on the oversampled clipper input, so the knee
+        // responds to how hard the circuit is ACTUALLY being hit rather than
+        // to where the knob sits. See src/dsp/KneeSoftening.h.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::kneeResponse, 1 },
+            "Knee Response",
+            juce::StringArray { "Drive", "Signal" },
+            0));
+
+        //======================================================================
+        // Clip Quality: "Classic" (index 0, default) is the exact v0.2.0
+        // clipper path, bit for bit. "Enhanced" adds first-order
+        // antiderivative anti-aliasing to the three memoryless voicings plus
+        // a 5 Hz DC blocker on the clipper output - measurably ~20 dB less
+        // alias energy at 2x oversampling (tests/AdaaTests.cpp T-A1) with
+        // the harmonic spectrum unchanged (T-A2). A configuration choice,
+        // not a performance control: it is deliberately NOT smoothed or
+        // crossfaded, and it has no effect on the Feedback voicing, which is
+        // a circuit solver rather than a transfer curve.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::clipQuality, 1 },
+            "Clip Quality",
+            juce::StringArray { "Classic", "Enhanced" },
+            0));
 
         return layout;
     }

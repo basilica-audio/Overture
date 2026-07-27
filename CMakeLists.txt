@@ -10,7 +10,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS deployment ta
 # here at the top level avoids it being enabled implicitly deeper inside
 # JUCE's CMake helpers, which has been observed to break Ninja's generate
 # step (missing CMAKE_C_COMPILE_OBJECT rule variable).
-project(Overture VERSION 0.2.0 LANGUAGES C CXX)
+project(Overture VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -75,6 +75,8 @@ juce_add_binary_data(OvertureBinaryData SOURCES
     presets/factory/fuzzAdjacentLead.json
     presets/factory/parallelGrit.json
     presets/factory/deFizzCleanup.json
+    presets/factory/tightRhythmGate.json
+    presets/factory/circuitDrive.json
     resources/i18n/de.txt
 )
 

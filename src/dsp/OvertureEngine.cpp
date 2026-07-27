@@ -62,6 +62,34 @@ void OvertureEngine::prepare (const juce::dsp::ProcessSpec& spec)
 
     dryWetMixer.prepare (spec);
 
+    // v0.3.0 stages. The gate runs at the BASE rate (it is a multiplicative
+    // gain, not a waveshaper - no oversampling, no ADAA, zero latency); the
+    // Feedback circuit solver, the ADAA wrapper and the Knee Response
+    // envelope all run at the OVERSAMPLED rate; the DC blocker runs at the
+    // base rate again, post-downsample.
+    noiseGate.prepare (sampleRate, static_cast<int> (spec.numChannels));
+    noiseGate.setThresholdDb (lastGateThresholdDb);
+    noiseGate.setReleaseMode (gateReleaseMode);
+
+    feedbackStage.prepare (oversampledSampleRate, static_cast<int> (spec.numChannels));
+    feedbackStage.setDriveDb (lastDriveDb);
+    feedbackStage.setAsymmetry01 (static_cast<double> (lastAsymmetryAmountPercent) * 0.01);
+    feedbackStage.snapSmoothingToTarget();
+
+    adaaWaveshaper.prepare (static_cast<int> (spec.numChannels));
+    dcBlocker.prepare (sampleRate, static_cast<int> (spec.numChannels));
+    kneeEnvelope.prepare (static_cast<int> (spec.numChannels), kneeEnvelopeReleaseSeconds, oversampledSampleRate);
+
+    // Force the first sub-block after every prepare() to recompute every
+    // filter's coefficients (see the members' docs in OvertureEngine.h):
+    // prepare()'s priming below uses the allocating IIR::Coefficients
+    // factory, whose result can differ by an ULP from the non-allocating
+    // ArrayCoefficients path processSubBlock() uses, and v0.2.0 always
+    // landed on the latter from the very first block.
+    lastAppliedTightHz = -1.0f;
+    lastAppliedBiteAmountPercent = -1.0f;
+    lastAppliedBiteTiltPercent = -1.0e9f;
+
     latencySamples = static_cast<int> (std::round (oversampler->getLatencyInSamples()));
     dryWetMixer.setWetLatency (static_cast<float> (latencySamples));
 
@@ -125,12 +153,66 @@ void OvertureEngine::reset()
     biteTiltShelf.reset();
     outputLevel.reset();
     dryWetMixer.reset();
+
+    noiseGate.reset();
+    feedbackStage.reset();
+    adaaWaveshaper.reset();
+    dcBlocker.reset();
+    kneeEnvelope.reset (0.0);
+}
+
+//==============================================================================
+void OvertureEngine::setGateEnabled (bool shouldBeEnabled) noexcept
+{
+    gateEnabled = shouldBeEnabled;
+}
+
+void OvertureEngine::setGateThresholdDb (float newThresholdDb) noexcept
+{
+    lastGateThresholdDb = newThresholdDb;
+    noiseGate.setThresholdDb (static_cast<double> (newThresholdDb));
+}
+
+void OvertureEngine::setGateReleaseMode (basilica::dsp::NoiseGate::ReleaseMode newMode) noexcept
+{
+    gateReleaseMode = newMode;
+    noiseGate.setReleaseMode (newMode);
+}
+
+void OvertureEngine::setKneeResponseMode (KneeResponseMode newMode) noexcept
+{
+    if (newMode == kneeResponseMode)
+        return;
+
+    // Pre-seed the envelope from the outgoing mode's intensity so switching
+    // modes mid-signal does not step the knee blend (brief SS4).
+    if (newMode == KneeResponseMode::signal)
+        kneeEnvelope.reset (static_cast<double> (
+            KneeSoftening::intensityFromDriveDb (lastDriveDb, driveIntensityReferenceDb)));
+
+    kneeResponseMode = newMode;
+}
+
+void OvertureEngine::setClipQualityMode (ClipQualityMode newMode) noexcept
+{
+    clipQualityMode = newMode;
+}
+
+void OvertureEngine::setParameterUpdateSubBlockSize (int newSubBlockSize) noexcept
+{
+    subBlockSize = static_cast<size_t> (juce::jmax (1, newSubBlockSize));
 }
 
 void OvertureEngine::setDriveDb (float newDriveDb)
 {
     lastDriveDb = newDriveDb;
     driveGain.setGainDecibels (newDriveDb);
+
+    // The Feedback voicing consumes Drive as the circuit's feedback
+    // resistance R2 = 51k + D*500k rather than as a pre-clipper gain (see
+    // src/dsp/FeedbackClipperStage.h); processSubBlock() forces driveGain
+    // itself to 0 dB while that voicing is selected.
+    feedbackStage.setDriveDb (static_cast<double> (newDriveDb));
 }
 
 void OvertureEngine::setTightFrequencyHz (float newFrequencyHz)
@@ -217,12 +299,39 @@ void OvertureEngine::processChunk (juce::dsp::AudioBlock<float>& block)
 {
     const auto numSamples = block.getNumSamples();
 
+    if (numSamples == 0)
+        return;
+
+    // v0.3.0 sub-block loop: every parameter smoother, coefficient update
+    // and mode dispatch happens at this cadence (32 base-rate samples by
+    // default => ~1.5 kHz at 48 kHz, up from v0.2.0's ~86 Hz block rate).
+    // The filters, the oversampler and the DryWetMixer are all block-size
+    // invariant IIR/delay structures, so splitting the work does not change
+    // the output for static parameters - it only stops automation from
+    // stepping the coefficients once per host block.
+    const auto step = subBlockSize > 0 ? subBlockSize : numSamples;
+
+    for (size_t offset = 0; offset < numSamples; offset += step)
+    {
+        const auto length = juce::jmin (step, numSamples - offset);
+        auto subBlock = block.getSubBlock (offset, length);
+        processSubBlock (subBlock);
+    }
+}
+
+void OvertureEngine::processSubBlock (juce::dsp::AudioBlock<float>& block)
+{
+    const auto numSamples = block.getNumSamples();
+    const auto numChannels = block.getNumChannels();
+
     // Coefficient recomputation involves trig calls (tan/cos), so filter
-    // frequencies/percentages are smoothed and re-derived once per chunk
+    // frequencies/percentages are smoothed and re-derived once per sub-block
     // rather than per sample - a standard real-time-safe compromise for IIR
     // filters, whose coefficients aren't cheap to interpolate directly.
     // Drive/Level still ramp sample-accurately via juce::dsp::Gain's
-    // internal SmoothedValue, and Mix is re-applied every chunk below.
+    // internal SmoothedValue, the gate's control path is per-sample
+    // regardless (see src/dsp/NoiseGate.h), and Mix is re-applied every
+    // sub-block below.
     const auto tightHz = clampBelowNyquist (tightFrequencySmoothed.skip (static_cast<int> (numSamples)), sampleRate);
     const auto wetMix = mixSmoothed.skip (static_cast<int> (numSamples));
     const auto biteAmountPercent = biteAmountSmoothed.skip (static_cast<int> (numSamples));
@@ -230,15 +339,25 @@ void OvertureEngine::processChunk (juce::dsp::AudioBlock<float>& block)
     const auto asymmetryAmountPercent = asymmetryAmountSmoothed.skip (static_cast<int> (numSamples));
     const auto biteTiltPercent = biteTiltSmoothed.skip (static_cast<int> (numSamples));
 
+    const auto isFeedbackVoicing = currentVoicing == ClipperVoicing::feedback;
+    const auto useAdaa = clipQualityMode == ClipQualityMode::enhanced && ! isFeedbackVoicing;
+    const auto useDcBlocker = isFeedbackVoicing || clipQualityMode == ClipQualityMode::enhanced;
+
     // Non-allocating coefficient update (issue #12): ArrayCoefficients::
     // makeHighPass computes into a stack std::array, which
     // applyBiquadCoefficients then writes into the already-allocated
     // Coefficients storage primed by prepare() - no heap traffic on the
-    // audio thread, unlike the IIR::Coefficients::makeHighPass this
-    // replaced (which `new`s a fresh ref-counted Coefficients object,
-    // including its own heap-backed Array, per call).
-    ovtr::applyBiquadCoefficients (*tightHighPass.state,
-        juce::dsp::IIR::ArrayCoefficients<float>::makeHighPass (sampleRate, tightHz, shelfQ));
+    // audio thread. v0.3.0 additionally skips the recompute entirely while
+    // the smoothed value has not moved (epsilon compare), which is what
+    // keeps a settled parameter's coefficients - and therefore the output -
+    // bit-identical to v0.2.0 despite the 16x higher update cadence.
+    if (std::abs (tightHz - lastAppliedTightHz) > coefficientEpsilonHz)
+    {
+        ovtr::applyBiquadCoefficients (*tightHighPass.state,
+            juce::dsp::IIR::ArrayCoefficients<float>::makeHighPass (sampleRate, tightHz, shelfQ));
+        lastAppliedTightHz = tightHz;
+    }
+
     dryWetMixer.setWetMixProportion (wetMix);
 
     juce::dsp::ProcessContextReplacing<float> context (block);
@@ -247,66 +366,161 @@ void OvertureEngine::processChunk (juce::dsp::AudioBlock<float>& block)
     // filtering touches `block`. DryWetMixer internally delays this by
     // getLatencySamples() (set via setWetLatency in prepare()) so it stays
     // time-aligned with the oversampled wet path below.
+    //
+    // This happens BEFORE the gate, deliberately: the dry path is ungated
+    // (the gate belongs to the wet pedal chain, exactly as an outboard gate
+    // in front of an amp would - documented in docs/manual.md), so a Mix
+    // below 100% still lets the untreated input through.
     dryWetMixer.pushDrySamples (block);
+
+    // Built-in noise gate (v0.3.0). Detector taps the plugin input, before
+    // Tight and before Drive; the resulting gain is applied to the wet path
+    // input so gated noise never reaches the clipper at all. Per-sample
+    // control path - a block-rate gate chatters.
+    if (gateEnabled)
+    {
+        if (! lastGateEnabled)
+            noiseGate.requestSeed();
+
+        for (size_t sample = 0; sample < numSamples; ++sample)
+        {
+            // Stereo linked: one detector fed by the max of |x| across
+            // channels, one gain applied to all of them, so the image never
+            // wanders as the gate opens and closes.
+            float detectorInput = 0.0f;
+
+            for (size_t channel = 0; channel < numChannels; ++channel)
+                detectorInput = juce::jmax (detectorInput, std::abs (block.getChannelPointer (channel)[sample]));
+
+            const auto gateGain = noiseGate.processSample (detectorInput);
+
+            for (size_t channel = 0; channel < numChannels; ++channel)
+                block.getChannelPointer (channel)[sample] *= gateGain;
+        }
+    }
+
+    lastGateEnabled = gateEnabled;
+
+    // The Feedback voicing computes its own 21.5-41.4 dB in-band loop gain
+    // from the circuit, so the plain pre-clipper Drive gain is forced flat
+    // for it (brief SS3.2). juce::dsp::Gain::setGainDecibels early-returns
+    // when the target is unchanged, so for the three legacy voicings this
+    // re-application of lastDriveDb is a no-op and leaves the ramp - and the
+    // output - exactly as v0.2.0 left it.
+    driveGain.setGainDecibels (isFeedbackVoicing ? 0.0f : lastDriveDb);
 
     tightHighPass.process (context);
     driveGain.process (context);
 
     auto oversampledBlock = oversampler->processSamplesUp (block);
-
-    // Bite: frequency-dependent gain INSIDE the drive-to-clipper path (see
-    // docs/design-brief.md SS"bite_amount" and the class-level docs in
-    // OvertureEngine.h) - a low-shelf run on the up-sampled block,
-    // immediately before the nonlinearity, that reduces the drive fed to
-    // the clipper below biteShelfCornerHz, scaled by biteAmountPercent.
-    // Skipped entirely (not just given unity-gain coefficients) when
-    // biteAmountPercent is exactly 0, so bite_amount = 0 leaves the
-    // oversampled signal reaching the clipper bit-identical to v0.1's plain
-    // drive-gain-then-clip path - the backward-compatibility guarantee
-    // tests/EngineTests.cpp's null tests verify.
-    if (biteAmountPercent > 0.0f)
-    {
-        const auto biteCutDb = -(biteAmountPercent * 0.01f) * biteShelfMaxCutDb;
-        const auto biteGainFactor = juce::Decibels::decibelsToGain (biteCutDb);
-
-        ovtr::applyBiquadCoefficients (*biteShelf.state,
-            juce::dsp::IIR::ArrayCoefficients<float>::makeLowShelf (oversampledSampleRate, biteShelfCornerHz, shelfQ, biteGainFactor));
-
-        juce::dsp::ProcessContextReplacing<float> biteContext (oversampledBlock);
-        biteShelf.process (biteContext);
-    }
+    const auto numOversampledSamples = oversampledBlock.getNumSamples();
+    const auto numOversampledChannels = oversampledBlock.getNumChannels();
 
     // Asymmetry: asymmetryAmount (0-100%) maps linearly to the Asymmetric
     // voicing's bias `a` in 0.0-asymmetryMaxBias. Only the Asymmetric
     // voicing consumes this (see ClipperVoicings::processSample) - Soft
-    // Symmetric/Hard Clip ignore it, exactly as in v0.1.
+    // Symmetric/Hard Clip ignore it, exactly as in v0.1. The Feedback
+    // voicing consumes the raw 0-1 proportion instead, as a morph of the
+    // diode law itself (see below).
     const auto asymmetryA = (asymmetryAmountPercent * 0.01f) * asymmetryMaxBias;
 
-    // Knee Soften: drive-dependent knee-softening blend amount (see
-    // src/dsp/KneeSoftening.h). driveIntensity01 is a real-time-safe,
-    // block-rate proxy for "how hard is the clipper currently being
-    // driven" (lastDriveDb normalised against Drive's own 0-40 dB range) -
-    // at kneeSoftenPercent == 0 this product is always exactly 0 regardless
-    // of Drive, reproducing v0.1's Drive-invariant fixed-knee behaviour
-    // exactly.
-    const auto driveIntensity01 = juce::jlimit (0.0f, 1.0f, lastDriveDb / driveIntensityReferenceDb);
-    const auto kneeBlend01 = (kneeSoftenPercent * 0.01f) * driveIntensity01;
-
-    // currentVoicing does not change mid-block (set at most once per
-    // process() call from the processor's atomic parameter read), so this
-    // switch is effectively free per sample - see ClipperVoicings::processSample.
-    for (size_t channel = 0; channel < oversampledBlock.getNumChannels(); ++channel)
+    if (isFeedbackVoicing)
     {
-        auto* channelData = oversampledBlock.getChannelPointer (channel);
+        // Circuit-solved voicing: no Bite shelf (the circuit's own 720 Hz
+        // pre-emphasis IS the bite mechanism) and no Knee Soften blend (its
+        // knee is physical) - both controls are inert here, which
+        // tests/EngineTests.cpp T-E2 asserts bit-for-bit rather than
+        // documents.
+        feedbackStage.setAsymmetry01 (static_cast<double> (asymmetryAmountPercent) * 0.01);
 
-        for (size_t sample = 0; sample < oversampledBlock.getNumSamples(); ++sample)
+        // Sample-major: the solver advances its shared, resistance-domain
+        // Drive smoother once per sample frame (on channel 0), so the
+        // channels have to move through it in lockstep.
+        for (size_t sample = 0; sample < numOversampledSamples; ++sample)
+            for (size_t channel = 0; channel < numOversampledChannels; ++channel)
+            {
+                auto* channelData = oversampledBlock.getChannelPointer (channel);
+                channelData[sample] = feedbackStage.processSample (static_cast<int> (channel), channelData[sample]);
+            }
+    }
+    else
+    {
+        // Bite: frequency-dependent gain INSIDE the drive-to-clipper path
+        // (see docs/design-brief.md SS"bite_amount" and the class-level docs
+        // in OvertureEngine.h) - a low-shelf run on the up-sampled block,
+        // immediately before the nonlinearity, that reduces the drive fed to
+        // the clipper below biteShelfCornerHz, scaled by biteAmountPercent.
+        // Skipped entirely (not just given unity-gain coefficients) when
+        // biteAmountPercent is exactly 0, so bite_amount = 0 leaves the
+        // oversampled signal reaching the clipper bit-identical to v0.1's
+        // plain drive-gain-then-clip path.
+        if (biteAmountPercent > 0.0f)
         {
-            const auto raw = ClipperVoicings::processSample (channelData[sample], currentVoicing, asymmetryA);
-            channelData[sample] = kneeBlend01 > 0.0f ? KneeSoftening::apply (raw, kneeBlend01) : raw;
+            if (std::abs (biteAmountPercent - lastAppliedBiteAmountPercent) > coefficientEpsilonPercent)
+            {
+                const auto biteCutDb = -(biteAmountPercent * 0.01f) * biteShelfMaxCutDb;
+                const auto biteGainFactor = juce::Decibels::decibelsToGain (biteCutDb);
+
+                ovtr::applyBiquadCoefficients (*biteShelf.state,
+                    juce::dsp::IIR::ArrayCoefficients<float>::makeLowShelf (oversampledSampleRate, biteShelfCornerHz, shelfQ, biteGainFactor));
+                lastAppliedBiteAmountPercent = biteAmountPercent;
+            }
+
+            juce::dsp::ProcessContextReplacing<float> biteContext (oversampledBlock);
+            biteShelf.process (biteContext);
+        }
+
+        // Knee Soften: drive-dependent knee-softening blend amount (see
+        // src/dsp/KneeSoftening.h). In the legacy "Drive" knee response the
+        // intensity is the open-loop lastDriveDb/40 proxy, constant across
+        // the sub-block and therefore bit-identical to v0.2.0's once-per-
+        // chunk computation; in "Signal" mode it is a per-sample, per-channel
+        // peak envelope of the actual oversampled clipper input.
+        const auto kneeSoften01 = kneeSoftenPercent * 0.01f;
+        const auto driveProxyIntensity01 = KneeSoftening::intensityFromDriveDb (lastDriveDb, driveIntensityReferenceDb);
+        const auto useSignalKnee = kneeResponseMode == KneeResponseMode::signal;
+
+        // currentVoicing does not change mid-block (set at most once per
+        // process() call from the processor's atomic parameter read), so the
+        // dispatch below is effectively free per sample.
+        for (size_t channel = 0; channel < numOversampledChannels; ++channel)
+        {
+            auto* channelData = oversampledBlock.getChannelPointer (channel);
+
+            for (size_t sample = 0; sample < numOversampledSamples; ++sample)
+            {
+                const auto u = channelData[sample];
+
+                const auto intensity01 = useSignalKnee
+                                             ? static_cast<float> (juce::jmin (1.0, kneeEnvelope.process (static_cast<int> (channel), std::abs (static_cast<double> (u)))))
+                                             : driveProxyIntensity01;
+
+                const auto raw = useAdaa
+                                     ? adaaWaveshaper.process (static_cast<int> (channel), u, currentVoicing, asymmetryA)
+                                     : ClipperVoicings::processSample (u, currentVoicing, asymmetryA);
+
+                const auto kneeBlend01 = kneeSoften01 * intensity01;
+                channelData[sample] = kneeBlend01 > 0.0f ? KneeSoftening::apply (raw, kneeBlend01) : raw;
+            }
         }
     }
 
     oversampler->processSamplesDown (block);
+
+    // DC blocker (5 Hz, post-downsample, pre-Bite-Tilt). Active for the
+    // Feedback voicing (its asymmetric diode law produces programme-
+    // dependent DC) and for Enhanced clip quality; the Classic legacy path
+    // keeps its existing DC-bearing output bit-identical.
+    if (useDcBlocker)
+    {
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            auto* channelData = block.getChannelPointer (channel);
+
+            for (size_t sample = 0; sample < numSamples; ++sample)
+                channelData[sample] = dcBlocker.processSample (static_cast<int> (channel), channelData[sample]);
+        }
+    }
 
     // Bite Tilt: post-clip bidirectional shelf (replaces v0.1's cut-only
     // Tone LPF - see docs/design-brief.md's "Bite" section and the
@@ -316,11 +530,16 @@ void OvertureEngine::processChunk (juce::dsp::AudioBlock<float>& block)
     // bidirectionality guarantee tests/EngineTests.cpp verifies.
     if (biteTiltPercent != 0.0f)
     {
-        const auto tiltDb = (biteTiltPercent * 0.01f) * biteTiltMaxDb;
-        const auto tiltGainFactor = juce::Decibels::decibelsToGain (tiltDb);
+        if (std::abs (biteTiltPercent - lastAppliedBiteTiltPercent) > coefficientEpsilonPercent)
+        {
+            const auto tiltDb = (biteTiltPercent * 0.01f) * biteTiltMaxDb;
+            const auto tiltGainFactor = juce::Decibels::decibelsToGain (tiltDb);
 
-        ovtr::applyBiquadCoefficients (*biteTiltShelf.state,
-            juce::dsp::IIR::ArrayCoefficients<float>::makeHighShelf (sampleRate, biteTiltCornerHz, shelfQ, tiltGainFactor));
+            ovtr::applyBiquadCoefficients (*biteTiltShelf.state,
+                juce::dsp::IIR::ArrayCoefficients<float>::makeHighShelf (sampleRate, biteTiltCornerHz, shelfQ, tiltGainFactor));
+            lastAppliedBiteTiltPercent = biteTiltPercent;
+        }
+
         biteTiltShelf.process (context);
     }
 

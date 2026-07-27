@@ -95,4 +95,46 @@ namespace ParamIDs
     // rule mapping an old `tone` value into an equivalent `biteTilt`
     // position.
     inline constexpr auto biteTilt = "biteTilt";
+
+    //======================================================================
+    // New in v0.3.0. Every one of these defaults to a NEUTRAL value, so a
+    // v0.2.0 session or preset that carries none of them loads and sounds
+    // bit-identical (asserted in tests/StateTests.cpp T-S1/T-S2 and
+    // tests/PresetManagerTests.cpp T-S3). See the v0.3.0 brief SS4 and
+    // docs/architecture.md for the state-schema contract.
+    //
+    // v0.3.0 ships these WITHOUT dedicated editor controls: they are fully
+    // host-automatable and reachable through the host's generic parameter
+    // view, and photoreal on-screen controls arrive with the M3 GUI (see
+    // docs/manual.md). The Voicing combo's new fourth entry is the sole
+    // editor-visible change and appears automatically, because the editor
+    // populates its combos from AudioParameterChoice::getAllValueStrings().
+
+    // Built-in noise gate on/off. Default OFF - the whole v0.2.0 signal
+    // path is untouched while this is false (src/dsp/NoiseGate.h).
+    inline constexpr auto gate = "gate";
+
+    // Gate opening threshold in dBFS (mean-square detector, so a full-scale
+    // sine reads -3 dB). The closing threshold sits a fixed 4 dB below it
+    // (hysteresis) - see NoiseGate::hysteresisDb.
+    inline constexpr auto gateThreshold = "gateThreshold";
+
+    // Gate release behaviour: Auto (program-dependent dual-envelope "TVP"
+    // release, the default), Fast (fixed 800 dB/s), Slow (fixed 60 dB/s).
+    // Indexes NoiseGate::ReleaseMode.
+    inline constexpr auto gateRelease = "gateRelease";
+
+    // How Knee Soften's intensity is derived: Drive (default, the v0.2.0
+    // open-loop lastDriveDb/40 proxy - bit-identical legacy behaviour) or
+    // Signal (an envelope follower on the oversampled clipper input). See
+    // src/dsp/KneeSoftening.h.
+    inline constexpr auto kneeResponse = "kneeResponse";
+
+    // Clipper quality for the three MEMORYLESS voicings: Classic (default,
+    // the bit-identical v0.2.0 path) or Enhanced (first-order antiderivative
+    // anti-aliasing plus a 5 Hz DC blocker - src/dsp/AdaaWaveshaper.h,
+    // src/dsp/DcBlocker.h). A configuration choice, not a performance
+    // control. Has no effect on the Feedback voicing, which is a circuit
+    // solver rather than a transfer curve (and always runs the DC blocker).
+    inline constexpr auto clipQuality = "clipQuality";
 }
