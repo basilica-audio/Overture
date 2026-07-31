@@ -2,6 +2,7 @@
 #include "params/ParameterIds.h"
 #include "TestHelpers.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 // Broadens coverage beyond the original v0.1 suite per the M1 "Broaden test
@@ -177,5 +178,112 @@ TEST_CASE ("Rapid Bypass/Voicing/Oversampling automation across many blocks prod
 
         CHECK_NOTHROW (processor.processBlock (buffer, midi));
         CHECK (TestHelpers::allSamplesFinite (buffer));
+    }
+}
+
+//==============================================================================
+// Suite-wide hardening wave: sample-rate matrix reprepare.
+//
+// Broader than the two sample-rate tests above: this drives one processor
+// instance through a full 44.1k -> 96k -> 192k reprepare matrix, crossing
+// small AND large block sizes and mono/stereo bus layouts along the way,
+// with automation-like parameter churn between reprepares. It exists
+// because prepareToPlay() reconstructs Overture's oversampler (see
+// OvertureEngine::setOversamplingFactorPow2() and this repo's CLAUDE.md) -
+// exactly the kind of state teardown/rebuild that can silently drop
+// APVTS-independent internal state, report stale latency, or leave a
+// dangling pointer into the old oversampler if a reprepare path is ever
+// missed. Deterministic and block counts kept small so this stays well
+// under 30s even on Debug/CI.
+TEST_CASE ("Sample-rate matrix reprepare: 44.1k -> 96k -> 192k across block sizes and bus "
+           "layouts survives parameter automation and reports correct latency every time",
+           "[robustness][samplerate][reprepare]")
+{
+    OvertureAudioProcessor processor;
+    juce::MidiBuffer midi;
+
+    setParam (processor, ParamIDs::drive, 17.5f);
+    setParam (processor, ParamIDs::tight, 165.0f);
+    setParam (processor, ParamIDs::biteTilt, -35.0f);
+    setParam (processor, ParamIDs::level, -4.0f);
+    setParam (processor, ParamIDs::mix, 73.0f);
+    setParam (processor, ParamIDs::voicing, 1.0f);
+
+    auto* driveParam = processor.apvts.getParameter (ParamIDs::drive);
+    REQUIRE (driveParam != nullptr);
+
+    // Tracks what Drive's value ought to be at the start of each iteration -
+    // seeded from the setParam() above, then updated to the last value the
+    // automation loop below left it at, so each reprepare's "did the value
+    // survive" check is against ground truth rather than a stale constant.
+    auto expectedDriveValue = driveParam->convertFrom0to1 (driveParam->getValue());
+
+    struct Step
+    {
+        double sampleRate;
+        int blockSize;
+        int numChannels;
+    };
+
+    // Small AND large blocks at both 96k and 192k, plus a mono layout
+    // change thrown in at 192k (Overture supports mono - see "Mono bus
+    // layout is supported..." above) to make sure a channel-count change
+    // riding along with a sample-rate reprepare doesn't trip anything up.
+    static constexpr Step steps[] = {
+        { 44100.0,  32,   2 },
+        { 96000.0,  32,   2 },
+        { 96000.0,  2048, 2 },
+        { 192000.0, 32,   1 },
+        { 192000.0, 2048, 2 },
+    };
+
+    for (const auto& step : steps)
+    {
+        if (step.numChannels == 1)
+        {
+            juce::AudioProcessor::BusesLayout monoLayout;
+            monoLayout.inputBuses.add (juce::AudioChannelSet::mono());
+            monoLayout.outputBuses.add (juce::AudioChannelSet::mono());
+            REQUIRE (processor.setBusesLayout (monoLayout));
+        }
+        else
+        {
+            juce::AudioProcessor::BusesLayout stereoLayout;
+            stereoLayout.inputBuses.add (juce::AudioChannelSet::stereo());
+            stereoLayout.outputBuses.add (juce::AudioChannelSet::stereo());
+            REQUIRE (processor.setBusesLayout (stereoLayout));
+        }
+
+        processor.prepareToPlay (step.sampleRate, step.blockSize);
+
+        // Latency must be reported (and positive - the oversampler always
+        // adds some) after every single reprepare in the matrix, not just
+        // the first one.
+        CHECK (processor.getLatencySamples() > 0);
+
+        // State survival: prepareToPlay() must never reset APVTS parameter
+        // values, at any sample rate/block-size/layout combination.
+        CHECK (driveParam->convertFrom0to1 (driveParam->getValue())
+               == Catch::Approx (expectedDriveValue).margin (0.01f));
+
+        juce::AudioBuffer<float> buffer (step.numChannels, step.blockSize);
+
+        for (int block = 0; block < 4; ++block)
+        {
+            // Automation-like parameter churn while processing, mimicking a
+            // host sweeping controls mid-stream between reprepares.
+            const auto sweep = static_cast<float> (block) / 4.0f;
+            expectedDriveValue = 5.0f + sweep * 35.0f;
+            setParam (processor, ParamIDs::drive, expectedDriveValue);
+            setParam (processor, ParamIDs::biteAmount, sweep * 100.0f);
+            setParam (processor, ParamIDs::kneeSoften, sweep * 100.0f);
+            setParam (processor, ParamIDs::biteTilt, -100.0f + sweep * 200.0f);
+
+            TestHelpers::fillWithSine (buffer, step.sampleRate, 440.0, 0.6f,
+                                       static_cast<juce::int64> (block) * step.blockSize);
+
+            CHECK_NOTHROW (processor.processBlock (buffer, midi));
+            CHECK (TestHelpers::allSamplesFinite (buffer));
+        }
     }
 }
