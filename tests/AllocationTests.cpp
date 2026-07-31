@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <new>
 #include <vector>
 
 // Permanent audio-thread allocation regression guard (basilica-audio/
@@ -271,4 +272,43 @@ TEST_CASE ("T-P1: the oversized-block chunk guard still holds with the gate enga
         worst = std::max (worst, std::abs (static_cast<double> (oversized[i]) - static_cast<double> (chunked[i])));
 
     CHECK (worst == 0.0);
+}
+
+//==============================================================================
+// Suite-wide hardening wave: the allocation guard itself works.
+//
+// Every CHECK (guard.count() == 0) above is only as trustworthy as the guard
+// that produced the count. A guard that never fires would make all of them
+// vacuously true. This test proves it does fire - but the obvious way to
+// write it, `new float[64]; delete[] ...;`, is NOT reliable: [expr.new]
+// explicitly permits an implementation to elide a new-expression's
+// allocation when its storage is never observably used, and Clang does
+// exactly that at -O2, which would make this self-test pass while silently
+// testing nothing. To defeat the elision, the storage is obtained through a
+// direct call to the replaced `::operator new` (a plain function call, not a
+// new-expression, so the elision permission in [expr.new] does not apply)
+// and then written through a volatile pointer, which makes the allocation
+// observably used and therefore impossible to optimise away. Same technique
+// as sibling plugins requiem (tests/EngineTests.cpp, "6.12 The allocation
+// guard itself works") and triptych (tests/RobustnessTests.cpp, "The
+// allocation guard itself works").
+TEST_CASE ("The allocation guard itself works", "[dsp][rt-safety][alloc]")
+{
+    {
+        const TestAlloc::AllocationGuard guard;
+        auto* deliberate = static_cast<float*> (::operator new (64 * sizeof (float)));
+        *static_cast<volatile float*> (deliberate) = 1.0f;
+        ::operator delete (deliberate);
+        CHECK (guard.count() > 0);
+    }
+
+    {
+        const TestAlloc::AllocationGuard guard;
+        volatile auto sum = 0.0f;
+
+        for (int i = 0; i < 1000; ++i)
+            sum = sum + static_cast<float> (i);
+
+        CHECK (guard.count() == 0);
+    }
 }
