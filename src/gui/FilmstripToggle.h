@@ -7,7 +7,15 @@
 // on+hover, in that frame order (frame 0 at the top of the strip).
 namespace basilica::gui
 {
-    class FilmstripToggle : public juce::Button
+    // Derives from juce::ToggleButton (not juce::Button) so the accessibility
+    // handler reports AccessibilityRole::toggleButton (JUCE 8.0.14,
+    // juce_ToggleButton.cpp:71) - a plain juce::Button subclass reports only
+    // AccessibilityRole::button (juce_Button.cpp:725-727), which mis-files
+    // the control in VoiceOver's rotor / NVDA's by-type quick-nav even
+    // though the checkable/checked STATE already worked via
+    // setClickingTogglesState. paintButton() is a full custom override, so
+    // no ToggleButton default drawing leaks through.
+    class FilmstripToggle : public juce::ToggleButton
     {
     public:
         FilmstripToggle (const juce::String& buttonName, juce::Image strip1x, juce::Image strip2x);

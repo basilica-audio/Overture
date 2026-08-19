@@ -5,15 +5,16 @@
 namespace basilica::gui
 {
     FilmstripToggle::FilmstripToggle (const juce::String& buttonName, juce::Image strip1xIn, juce::Image strip2xIn)
-        : juce::Button (buttonName),
+        : juce::ToggleButton (buttonName),
           strip1x (std::move (strip1xIn)),
           strip2x (std::move (strip2xIn))
     {
-        // A click flips getToggleState(); AudioProcessorValueTreeState::
-        // ButtonAttachment (see PluginEditor.cpp) only requires the Button
-        // base-class toggle interface, so this works identically to
-        // juce::ToggleButton from the attachment's point of view.
-        setClickingTogglesState (true);
+        // juce::ToggleButton's own constructor already calls
+        // setClickingTogglesState(true) (JUCE 8.0.14, juce_ToggleButton.cpp)
+        // - nothing further to wire; ButtonAttachment only requires the
+        // Button base-class toggle interface either way. The base-class
+        // switch from juce::Button is purely for the accessibility ROLE -
+        // see the class comment in the header.
     }
 
     FilmstripToggle::~FilmstripToggle() = default;
