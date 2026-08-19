@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+**Pilot-gated - not yet released.** This M3 GUI work replicates the
+`basilica-audio/silentium` M3 pilot pattern one asset-wave behind Silentium's
+own approved v2 reskin (see PR discussion). It ships on its feature branch
+for review only; no version bump or tag until the Silentium M3 pilot design
+is signed off and this editor is reskinned to the approved asset families.
+
+### Added
+
+- **Photoreal skeuomorphic GUI (M3)** - replaces the v0.1/v0.2 functional slider/toggle/combo-box editor with a custom editor built from pre-rendered Blender assets (the suite's gui-pipeline renders, copied into `resources/gui/` and embedded via BinaryData so the repo stays self-contained), replicating `basilica-audio/silentium`'s M3 pilot pattern: a stone/gunmetal faceplate with four engraved section bays (input, clipper, output, utility - see `.scaffold/gui-assets/faceplate-overture-v1/layout-manifest.json`), brass filmstrip knobs (128 frames, -135deg..+135deg) for the 8 continuous parameters, and a brass lever toggle for `bypass`. See `docs/gui-preview.png` for the rendered result.
+- **Suite-reusable GUI component family** (`src/gui/`), ported verbatim from Silentium's M3 pilot (Silentium-agnostic by design): `FilmstripKnob` (filmstrip-backed `juce::Slider`, Shift = fine drag, double-click resets to the parameter default, mouse-wheel support), `FilmstripToggle` (4-frame `juce::Button`), `BasilicaLookAndFeel` (gold serif labels with an engraved dual-shadow look and a WCAG-AA-verified opaque backing chip - the interim JUCE-drawn label solution until per-control text is baked into the faceplate art), and `ImageDensity.h` (@1x/@2x asset tier selection). `AnalogMeter` was intentionally NOT ported - Overture's layout manifest declares no meter bay (it's a boost/overdrive, not a gate/compressor with a gain-reduction reading to show).
+- **`voicing`/`oversampling` choice controls**: no dedicated filmstrip/combo-box art ships in this asset wave (the manifest declares 2 choice slots, not per-control art), so these two discrete parameters remain stock `juce::ComboBox` instances, explicitly recoloured (background/text/outline/arrow) to the same gold-on-gunmetal palette `BasilicaLookAndFeel`'s labels use, so they read as part of the same engraved family rather than a visibly foreign JUCE default.
+- **Stepped window scaling** (100/150/200%, via a control next to the preset bar) - no free resize, because the artwork is pre-rendered at fixed density tiers. The chosen step persists in the plugin state (a plain `uiScaleStep` property on the APVTS tree) and round-trips through host session save/reload.
+- **Accessibility**: all controls derive from stock `juce::Slider`/`juce::Button`/`juce::ComboBox`, so JUCE's accessibility handlers, keyboard operation, and host parameter attachments work unchanged; accessible titles are set from parameter names (with declared units - dB/Hz/% - included in the reported value string), and creation order matches the visual reading order (header/scale, preset bar, input bay, clipper bay, output bay, utility bay) for focus traversal.
+- New GUI test suite (ported and adapted from Silentium's M3 pilot): filmstrip frame-math edges, label text/backing-chip WCAG 1.4.3 contrast ratio, layout invariants asserted against the manifest's own bay rects, knob/toggle/combo-box accessible name and value tests, editor construct/destroy, and an offscreen editor snapshot (written to `build/gui-preview.png`, committed as `docs/gui-preview.png`) verified non-blank.
+
+### Compatibility
+
+- **The five v0.3.0 engine parameters (`gate`, `gateThreshold`, `gateRelease`, `clipQuality`, `kneeResponse`) still ship without dedicated photoreal controls in this asset wave** - the faceplate manifest predates v0.3.0 and declares no bays or choice slots for them, so v0.3.0's "Photoreal controls arrive with the M3 GUI" expectation moves to the next asset wave. They remain fully host-automatable and reachable through the host's generic parameter view, exactly as in v0.3.0.
+
 ## [0.3.0] - 2026-07-27
 
 The release that replaces the last "textbook static waveshaper" excuse with a genuinely circuit-solved feedback clipper, and adds the built-in gate the plugin's own stated use case - palm-muted, low-tuned chugging - was never credible without. Every new parameter defaults to a neutral value, so **a v0.2.0 session or preset loads and sounds bit-identical** (asserted against goldens recorded from the v0.2.0 engine, not argued).
