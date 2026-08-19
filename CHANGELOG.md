@@ -7,11 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-**Pilot-gated - not yet released.** This M3 GUI work replicates the
-`basilica-audio/silentium` M3 pilot pattern one asset-wave behind Silentium's
-own approved v2 reskin (see PR discussion). It ships on its feature branch
-for review only; no version bump or tag until the Silentium M3 pilot design
-is signed off and this editor is reskinned to the approved asset families.
+## [0.4.0] - 2026-08-19
+
+The M3 GUI release: the functional slider/toggle/combo-box editor is replaced by the
+photoreal skeuomorphic faceplate editor, following `basilica-audio/silentium`'s M3
+pilot pattern (PR #23, merged after the pilot sign-off that gated it).
 
 ### Added
 
@@ -21,6 +21,18 @@ is signed off and this editor is reskinned to the approved asset families.
 - **Stepped window scaling** (100/150/200%, via a control next to the preset bar) - no free resize, because the artwork is pre-rendered at fixed density tiers. The chosen step persists in the plugin state (a plain `uiScaleStep` property on the APVTS tree) and round-trips through host session save/reload.
 - **Accessibility**: all controls derive from stock `juce::Slider`/`juce::Button`/`juce::ComboBox`, so JUCE's accessibility handlers, keyboard operation, and host parameter attachments work unchanged; accessible titles are set from parameter names (with declared units - dB/Hz/% - included in the reported value string), and creation order matches the visual reading order (header/scale, preset bar, input bay, clipper bay, output bay, utility bay) for focus traversal.
 - New GUI test suite (ported and adapted from Silentium's M3 pilot): filmstrip frame-math edges, label text/backing-chip WCAG 1.4.3 contrast ratio, layout invariants asserted against the manifest's own bay rects, knob/toggle/combo-box accessible name and value tests, editor construct/destroy, and an offscreen editor snapshot (written to `build/gui-preview.png`, committed as `docs/gui-preview.png`) verified non-blank.
+- Elision-safe allocation-guard self-test and a sample-rate-matrix reprepare test
+  (44.1k -> 96k -> 192k, crossing 32/2048-sample blocks and a mono/stereo bus-layout
+  change) (PR #27).
+
+### Changed
+
+- `docs/manual.md`: a "Reported latency" table (4 samples at 2x, 6 samples at 4x and
+  8x, with the rounding reason the 4x -> 8x step can land on the same total), gate
+  ballistics a user can act on (stereo-linked detection, sub-millisecond opening,
+  90 dB range instead of a hard mute), and a corrected stale claim - the Feedback
+  voicing does consume Asymmetry, by morphing the diode law itself (PR #25).
+- Branding: v3 flat squircle icon (no dish/ring) (PR #26).
 
 ### Compatibility
 
