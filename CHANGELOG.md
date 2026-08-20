@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-20
+
+An accessibility release. The photoreal faceplate's eight brass knobs are now reachable and operable from the keyboard alone, and the Bypass lever finally identifies itself to screen readers as the toggle it is. Nothing in the audio path changed - a v0.4.0 session loads and renders bit-identically.
+
+### Added
+
+- **WAI-ARIA-style keyboard stepping on the eight knobs** (`src/gui/KeyboardSteps.h`, PR #29). Arrow moves 1% of the control's range, Shift+Arrow 0.1% - the keyboard analog of the Shift-drag fine mode the knobs have always had on the mouse - PageUp/PageDown 10%, and Home/End the range extremes. Steps are taken in the slider's proportional domain, so a skewed range sweeps as evenly under the arrow keys as under a drag, and the result is still snapped to the parameter's own interval grid, so quantisation is never violated. A focus flag alone would not have been enough: JUCE's stock handler steps by the raw parameter interval (0.01 dB across Drive's 40 dB range - 4000 presses end to end) and bails out the moment any modifier key is held, so Shift+Arrow did nothing whatsoever. Ctrl/Cmd-modified arrows are deliberately passed through to the host as shortcuts.
+- New `tests/gui/EditorAccessibilityTests.cpp` coverage pinning the contract: focus reachability of all eight knobs, the Bypass toggle, both choice combo boxes and the scale button (asserted by count, so a zero-match loop cannot pass vacuously); coarse/fine/page/Home/End stepping and Ctrl/Cmd passthrough on Drive; and the toggle's reported accessibility role.
+
+### Fixed
+
+- **The eight knobs could not be reached by keyboard at all** (PR #29). `juce::Slider::init()` ships `setWantsKeyboardFocus(false)` (JUCE 8.0.14, `juce_Slider.cpp:1461`) and `FilmstripKnob` never opted back in, so Tab skipped straight past every knob, the focus ring already drawn in `paint()` could never appear, and no key press ever arrived. They now take focus in reading order - header/scale, preset bar, then the input, clipper, output and utility bays - and show their ring while focused. This is the gap behind v0.4.0's "keyboard operation works unchanged" accessibility note, which was true of the stock JUCE classes in the abstract but not of the controls as they actually shipped.
+- **Bypass was announced as a plain button rather than a toggle** (PR #29). `FilmstripToggle` derived from `juce::Button`, which reports `AccessibilityRole::button`; the checkable/checked *state* was correct, but the control was mis-filed in VoiceOver's rotor and NVDA's by-type quick navigation, so a user browsing by control type would not find Bypass among the toggles. It now derives from `juce::ToggleButton` and reports `AccessibilityRole::toggleButton`. The lever's custom artwork is unaffected - `paintButton()` is a full override, so no default drawing leaks through.
+
+### Known limitations
+
+- This release covers **keyboard** operation (WCAG 2.1.1, 2.4.7). Assistive-technology increment and decrement actions - VoiceOver's rotor, NVDA's value adjustment - never reach `keyPressed()`; they go through JUCE's accessibility value interface, which still reports the raw parameter interval as its step size. A screen-reader user therefore still moves Drive 0.01 dB per action. Closing that gap means giving each control a custom `AccessibilityHandler` carrying its own value interface, which is the next step and is not part of this release.
+
 ## [0.4.0] - 2026-08-19
 
 The M3 GUI release: the functional slider/toggle/combo-box editor is replaced by the
