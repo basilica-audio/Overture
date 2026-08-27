@@ -601,14 +601,25 @@ TEST_CASE ("PresetManager: the nine v0.2.0 factory presets are byte-frozen", "[p
 {
     // FNV-1a (64-bit) over the embedded bytes, recorded from the v0.2.0
     // files. A mismatch means a supposedly frozen preset was edited.
+    //
+    // Two of the nine WERE edited, deliberately, in v0.3.1 (issue #44): Own
+    // Distortion and Fuzz-Adjacent Lead each got a derived `level` output
+    // trim so they stop pushing the reference programme past 0 dBFS - see
+    // tests/PresetHeadroomTests.cpp. Their hashes below are re-recorded for
+    // that change and for nothing else; the other seven are byte-untouched
+    // since v0.2.0. `level` is the last stage before the dry/wet mixer, so
+    // what moved is how loud those two presets are and not how they sound,
+    // and the checks further down (pluginVersion still 0.2.0, no v0.3.0
+    // parameter keys present) are unaffected and still assert that nobody
+    // "refreshed" the files while editing them.
     const std::vector<juce::uint64> expectedHashes {
         0x1a11aa086c0c5149ULL, // Default            (406 bytes)
         0x0c237549b5593db1ULL, // Clean Push         (411 bytes)
         0x49151390960fd597ULL, // Classic Boost      (414 bytes)
         0x49773aabf00646ecULL, // Drop-Tune Tight    (418 bytes)
         0xd835059549142dd9ULL, // Smooth Push        (378 bytes)
-        0xf5fb8436a321e953ULL, // Own Distortion     (384 bytes)
-        0x486e0fa8f7d97f03ULL, // Fuzz-Adjacent Lead (388 bytes)
+        0xf0972705022817baULL, // Own Distortion     (level trim, issue #44)
+        0x49bebe184581e61bULL, // Fuzz-Adjacent Lead (level trim, issue #44)
         0x40d2482c3408ef98ULL, // Parallel Grit      (414 bytes)
         0x6b5bce9136bc368eULL, // De-Fizz Cleanup    (385 bytes)
     };

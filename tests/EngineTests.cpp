@@ -268,6 +268,56 @@ TEST_CASE ("Bite Tilt: positive values brighten content above the corner relativ
     CHECK (boostedDb > flatDb + 1.0); // measurable boost above flat, not just noise
 }
 
+TEST_CASE ("Bite Tilt: the boost direction is bounded at +12 dB, so a positive tilt cannot run away "
+           "with the output level",
+           "[dsp][engine][bitetilt][headroom]")
+{
+    // The defect this pins (issue #44). Bite Tilt used ONE symmetric ceiling
+    // for both directions, and that ceiling was the 100 dB the CUT direction
+    // needs for its v0.1 Tone backward-compatibility guarantee (see the test
+    // below, and biteTiltMaxCutDb in OvertureEngine.h). A positive tilt
+    // therefore applied very nearly one dB of broadband boost per percent of
+    // knob travel: the Fuzz-Adjacent Lead factory preset, whose Hard Clip
+    // voicing bounds its pre-tilt signal at 0 dBFS BY CONSTRUCTION, rendered
+    // the reference programme at +27.10 dBFS - of which +23.27 dB was this
+    // shelf at a Bite Tilt of just +25%. Nothing in docs/design-brief.md ever
+    // asked the boost direction for more than "brighter".
+    //
+    // The bound is derived rather than tasted. biteTiltMaxBoostDb is the
+    // shelf's ASYMPTOTIC gain far above the corner, and the shelf is a
+    // 2nd-order RBJ section at Q = 1/sqrt(2) (OvertureEngine::shelfQ) -
+    // Butterworth, so its magnitude approaches that asymptote monotonically
+    // from below and never peaks above it. The realised boost is therefore
+    // bounded by the nominal ceiling at EVERY frequency, at every setting,
+    // which is what the sweep below asserts.
+    constexpr double ceilingDb = 12.0; // OvertureEngine::biteTiltMaxBoostDb
+    constexpr double numericToleranceDb = 0.1;
+
+    const auto boostAt = [] (float tiltPercent, double frequencyHz)
+    {
+        return measureBiteTiltAttenuationDb (tiltPercent, frequencyHz)
+                - measureBiteTiltAttenuationDb (0.0f, frequencyHz);
+    };
+
+    for (const float tiltPercent : { 25.0f, 50.0f, 100.0f })
+        for (const double frequencyHz : { 100.0, 500.0, 1000.0, 3000.0, 6000.0, 12000.0 })
+        {
+            INFO ("Bite Tilt +" << tiltPercent << "% at " << frequencyHz << " Hz");
+            CHECK (boostAt (tiltPercent, frequencyHz) <= ceilingDb + numericToleranceDb);
+        }
+
+    // ...and the ceiling is genuinely reached well above the corner, so the
+    // bound above is tight rather than vacuously true of any small number.
+    const auto asymptoticBoostDb = boostAt (100.0f, 12000.0);
+    INFO ("asymptotic boost at +100%: " << asymptoticBoostDb << " dB");
+    CHECK (asymptoticBoostDb > ceilingDb - 1.0);
+
+    // The knob is still monotonic in the boost direction - capping the
+    // ceiling must not have flattened the upper half into a plateau.
+    CHECK (boostAt (100.0f, 12000.0) > boostAt (50.0f, 12000.0) + 1.0);
+    CHECK (boostAt (50.0f, 12000.0) > boostAt (25.0f, 12000.0) + 1.0);
+}
+
 TEST_CASE ("Bite Tilt: fully-negative (-100%) subsumes v0.1's entire cut-only Tone range - "
            "at least as dark as v0.1's fully-closed Tone at the same test frequency",
            "[dsp][engine][bitetilt][backcompat]")
@@ -736,6 +786,19 @@ namespace v030
 
     // Runs a Bite Tilt automation ramp at the given internal
     // parameter-update cadence and returns the resulting signal.
+    // Automates Bite Tilt across its CUT half (-100% to 0%) while a steady
+    // 1 kHz tone plays, so T-E1 below can compare the zipper artefacts of a
+    // fine parameter-update cadence against a block-rate one.
+    //
+    // The cut half specifically, and not the full -100%..+100% travel this
+    // used to sweep. Since v0.3.1 Bite Tilt's two directions have different
+    // shelf-gain ceilings (biteTiltMaxCutDb 100 dB, biteTiltMaxBoostDb
+    // 12 dB - see OvertureEngine.h for why), so a full-travel knob sweep is
+    // no longer a symmetric 200 dB shelf-gain excursion and the zipper energy
+    // it produces is not comparable to what T-E1's bound was calibrated
+    // against. Sweeping the cut half keeps the excursion in the direction
+    // whose scaling did not change, which is what makes the measurement -
+    // and therefore T-E1's threshold - mean the same thing it always did.
     inline std::vector<float> runBiteTiltRamp (int subBlockSize)
     {
         constexpr double sampleRate = 48000.0;
@@ -764,7 +827,7 @@ namespace v030
         for (int block = 0; block < numBlocks; ++block)
         {
             const auto position = static_cast<float> (block) / static_cast<float> (numBlocks - 1);
-            engine.setBiteTiltPercent (-100.0f + 200.0f * position);
+            engine.setBiteTiltPercent (-100.0f + 100.0f * position);
 
             TestHelpers::fillWithSine (buffer, sampleRate, 1000.0, 0.25f, static_cast<juce::int64> (block) * blockSize);
 
