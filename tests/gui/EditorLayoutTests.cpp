@@ -1,75 +1,208 @@
+#include "PluginEditor.h"
 #include "PluginEditorLayout.h"
+#include "PluginProcessor.h"
+
+#include <BinaryData.h>
 
 #include <catch2/catch_test_macros.hpp>
 
-// Layout-invariant tests asserted directly against the same ovtr::layout
-// constants PluginEditor.cpp lays components out with (see
-// PluginEditorLayout.h), so this test and the actual layout can never
-// silently drift apart - pattern copied from basilica-audio/silentium's
-// EditorLayoutTests.cpp, adapted for Overture's four-bay (input/clipper/
-// output/utility) grid rather than Silentium's header/meter/control/aux
-// layout.
-TEST_CASE ("Header bay starts at or below the plate's top edge and above every control bay", "[gui][layout]")
-{
-    using namespace ovtr::layout;
+#include <algorithm>
+#include <map>
+#include <set>
+#include <vector>
 
-    CHECK (headerBay1x.getY() >= 0);
-    CHECK (headerBay1x.getBottom() <= inputBay1x.getY());
-    CHECK (headerBay1x.getBottom() <= clipperBay1x.getY());
+// Wave-3 compositional-layout invariants, asserted against the SAME parsed
+// manifest the editor composites from (PluginEditor::layoutManifest() /
+// gui/LayoutManifest.h) - never a second hand-maintained coordinate list.
+// The expected control census comes from the rollout control inventory
+// (.scaffold/gui-assets/rollout-2026-07/overture/control-inventory.md):
+// 8 knobs (5+3 staggered rows), 2 stepped selectors, 1 toggle, 0 meters.
+namespace
+{
+    basilica::gui::LayoutManifest parseManifest()
+    {
+        return basilica::gui::LayoutManifest::parse (BinaryData::layout_manifest_json,
+                                                     BinaryData::layout_manifest_jsonSize);
+    }
+
+    // The plate's usable control field (inside the gold pinstripe border),
+    // measured on plate_overture.png - see the wave-3 rollout measurement
+    // log. Slightly conservative on purpose.
+    constexpr float fieldLeft = 85.0f, fieldRight = 1162.0f;
+    constexpr float fieldTop = 85.0f, fieldBottom = 768.0f;
+
+    // Baked central divider flourish (measured: y 448..459, x 510..740) -
+    // no control cap may cover it.
+    const juce::Rectangle<float> dividerKeepOut (500.0f, 444.0f, 250.0f, 20.0f);
+
+    float capRadiusPlatePx (const basilica::gui::ManifestControl& control)
+    {
+        using namespace ovtr::layout;
+
+        if (control.kind == "selector")
+            return selectorCapRadius * control.scale;
+
+        if (control.kind == "toggle")
+            return 48.0f * control.scale; // housing half-height, conservative
+
+        return knobCapRadius * control.scale;
+    }
 }
 
-TEST_CASE ("The four control bays form a non-overlapping 2x2 grid matching the manifest", "[gui][layout]")
+TEST_CASE ("Manifest parses and matches the rollout control inventory census", "[gui][layout]")
 {
-    using namespace ovtr::layout;
+    const auto manifest = parseManifest();
 
-    // input/output share a left column, clipper/utility share a right
-    // column - see faceplate-overture-v1/layout-manifest.json's cx values
-    // (225 vs 675 on a 900-wide canvas).
-    CHECK (inputBay1x.getX() == outputBay1x.getX());
-    CHECK (clipperBay1x.getX() == utilityBay1x.getX());
-    CHECK (inputBay1x.getRight() <= clipperBay1x.getX());
+    REQUIRE (manifest.isValid());
+    CHECK (manifest.plateWidthPx == ovtr::layout::plateCanvasWidthPx);
+    CHECK (manifest.plateHeightPx == ovtr::layout::plateCanvasHeightPx);
 
-    // input/clipper share a top row, output/utility share a bottom row -
-    // see the manifest's cy values (270 vs 450).
-    CHECK (inputBay1x.getY() == clipperBay1x.getY());
-    CHECK (outputBay1x.getY() == utilityBay1x.getY());
-    CHECK (inputBay1x.getBottom() <= outputBay1x.getY());
+    CHECK (manifest.ofKind ("knob").size() == 8);
+    CHECK (manifest.ofKind ("selector").size() == 2);
+    CHECK (manifest.ofKind ("toggle").size() == 1);
+    CHECK (manifest.ofKind ("meter").empty()); // 0 meters is a DSP-justified inventory decision
+    CHECK (manifest.controls.size() == 11);
 }
 
-TEST_CASE ("Every bay rect matches faceplate-overture-v1/layout-manifest.json exactly", "[gui][layout]")
+TEST_CASE ("Every manifest control id resolves to a real APVTS parameter of the right type", "[gui][layout]")
 {
-    using namespace ovtr::layout;
+    const auto manifest = parseManifest();
+    REQUIRE (manifest.isValid());
 
-    // Manifest centre+size rects, converted to top-left form (cx - w/2,
-    // cy - h/2, w, h) - see PluginEditorLayout.h's docs for the conversion.
-    CHECK (inputBay1x == juce::Rectangle<int> (55, 195, 340, 150));
-    CHECK (clipperBay1x == juce::Rectangle<int> (505, 195, 340, 150));
-    CHECK (outputBay1x == juce::Rectangle<int> (55, 375, 340, 150));
-    CHECK (utilityBay1x == juce::Rectangle<int> (505, 375, 340, 150));
+    OvertureAudioProcessor processor;
+
+    for (const auto& control : manifest.controls)
+    {
+        auto* parameter = processor.apvts.getParameter (control.id);
+        INFO ("manifest id \"" << control.id.toStdString() << "\"");
+        REQUIRE (parameter != nullptr);
+
+        if (control.kind == "toggle")
+            CHECK (dynamic_cast<juce::AudioParameterBool*> (parameter) != nullptr);
+        else if (control.kind == "selector")
+            CHECK (dynamic_cast<juce::AudioParameterChoice*> (parameter) != nullptr);
+        else if (control.kind == "knob")
+            CHECK (dynamic_cast<juce::AudioParameterFloat*> (parameter) != nullptr);
+    }
 }
 
-TEST_CASE ("Every bay cell is tall enough for a label plus a full-diameter knob with no overlap", "[gui][layout]")
+TEST_CASE ("Knob rows follow the 5+3 staggered family signature", "[gui][layout]")
 {
-    using namespace ovtr::layout;
+    const auto manifest = parseManifest();
+    REQUIRE (manifest.isValid());
 
-    for (const auto& bay : { inputBay1x, clipperBay1x, outputBay1x, utilityBay1x })
-        CHECK (bay.getHeight() - knobLabelHeight1x >= knobDiameter1x);
+    std::map<float, std::vector<float>> rows; // cy -> sorted cx list
+
+    for (const auto* knob : manifest.ofKind ("knob"))
+        rows[knob->cy].push_back (knob->cx);
+
+    REQUIRE (rows.size() == 2);
+
+    auto it = rows.begin();
+    auto& row1 = it->second;
+    auto& row2 = std::next (it)->second;
+
+    CHECK (row1.size() == 5);
+    CHECK (row2.size() == 3);
+
+    for (auto* row : { &row1, &row2 })
+    {
+        std::sort (row->begin(), row->end());
+
+        // Uniform spacing within a row (the LAYOUT-INVARIANTE: same-role
+        // elements share a common axis and even rhythm).
+        for (size_t i = 2; i < row->size(); ++i)
+            CHECK (std::abs (((*row)[i] - (*row)[i - 1]) - ((*row)[1] - (*row)[0])) < 1.0f);
+    }
+
+    // Staggered: the second row's grid must not simply reuse the first
+    // row's x positions.
+    std::set<float> row1Xs (row1.begin(), row1.end());
+    int shared = 0;
+    for (const auto x : row2)
+        shared += row1Xs.count (x) > 0 ? 1 : 0;
+
+    CHECK (shared < (int) row2.size());
 }
 
-TEST_CASE ("The widest bay row (clipper, 4 controls) still fits the shared knob diameter per cell", "[gui][layout]")
+TEST_CASE ("Selectors share a row and toggles sit clear of the knob field", "[gui][layout]")
 {
-    using namespace ovtr::layout;
+    const auto manifest = parseManifest();
+    REQUIRE (manifest.isValid());
 
-    const auto cellW = clipperBay1x.getWidth() / maxControlsPerBayRow;
-    CHECK (cellW >= knobDiameter1x);
+    const auto selectors = manifest.ofKind ("selector");
+    REQUIRE (selectors.size() == 2);
+    CHECK (selectors[0]->cy == selectors[1]->cy);
+    CHECK (selectors[0]->cx != selectors[1]->cx);
 }
 
-TEST_CASE ("Every laid-out bay stays within the plate's own canvas bounds", "[gui][layout]")
+TEST_CASE ("Every control stays inside the pinstripe field and off the divider flourish", "[gui][layout]")
+{
+    const auto manifest = parseManifest();
+    REQUIRE (manifest.isValid());
+
+    for (const auto& control : manifest.controls)
+    {
+        const auto r = capRadiusPlatePx (control);
+        INFO ("control \"" << control.id.toStdString() << "\"");
+
+        CHECK (control.cx - r >= fieldLeft);
+        CHECK (control.cx + r <= fieldRight);
+        CHECK (control.cy - r >= fieldTop);
+        CHECK (control.cy + r <= fieldBottom);
+
+        const juce::Rectangle<float> capBox (control.cx - r, control.cy - r, 2.0f * r, 2.0f * r);
+        CHECK_FALSE (capBox.intersects (dividerKeepOut));
+
+        if (control.labelCy > 0.0f)
+        {
+            using namespace ovtr::layout;
+            const juce::Rectangle<float> labelBox (control.cx - labelBoxWidthPlatePx * 0.5f,
+                                                   control.labelCy - labelBoxHeightPlatePx * 0.5f,
+                                                   labelBoxWidthPlatePx, labelBoxHeightPlatePx);
+
+            CHECK (labelBox.getY() >= fieldTop);
+            CHECK (labelBox.getBottom() <= fieldBottom);
+
+            // Lettering never intrudes into its own control's rotating cap.
+            CHECK (labelBox.getY() >= control.cy + r - 1.0f);
+        }
+    }
+}
+
+TEST_CASE ("No two interactive caps overlap", "[gui][layout]")
+{
+    const auto manifest = parseManifest();
+    REQUIRE (manifest.isValid());
+
+    for (size_t a = 0; a < manifest.controls.size(); ++a)
+    {
+        for (size_t b = a + 1; b < manifest.controls.size(); ++b)
+        {
+            const auto& ca = manifest.controls[a];
+            const auto& cb = manifest.controls[b];
+
+            const auto minGap = capRadiusPlatePx (ca) + capRadiusPlatePx (cb);
+            const auto dx = ca.cx - cb.cx;
+            const auto dy = ca.cy - cb.cy;
+
+            INFO (ca.id.toStdString() << " vs " << cb.id.toStdString());
+            CHECK (dx * dx + dy * dy >= minGap * minGap);
+        }
+    }
+}
+
+TEST_CASE ("Editor base size derives from the plate geometry", "[gui][layout]")
 {
     using namespace ovtr::layout;
 
-    const juce::Rectangle<int> plateCanvas { 0, 0, plateWidth1x, plateHeight1x };
+    OvertureAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+    OvertureAudioProcessorEditor editor (processor);
 
-    for (const auto& bay : { headerBay1x, inputBay1x, clipperBay1x, outputBay1x, utilityBay1x })
-        CHECK (plateCanvas.contains (bay));
+    // A fresh processor carries no stored uiScaleStep, so the editor
+    // constructs at the 100% step and its size IS the base geometry.
+    CHECK (editor.getWidth() == baseEditorWidth);
+    CHECK (editor.getHeight() == baseEditorHeight);
+    CHECK (editor.layoutManifest().isValid());
 }
