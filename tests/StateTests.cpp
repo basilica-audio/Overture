@@ -176,7 +176,12 @@ TEST_CASE ("State migration: legacy tone=1000 Hz (v0.1 fully-closed) maps to bit
 
     auto* biteTiltParam = processor.apvts.getParameter (ParamIDs::biteTilt);
     REQUIRE (biteTiltParam != nullptr);
-    CHECK (biteTiltParam->convertFrom0to1 (biteTiltParam->getValue()) == Catch::Approx (-100.0f).margin (0.5f));
+    // The migration formula -100 * (8000 - tone) / 7000 is exact in double at
+    // this anchor (tone = 1000 -> -100 * 7000 / 7000 = exactly -100). The only
+    // remaining error is the parameter's own quantisation: biteTilt is a
+    // NormalisableRange (-100, 100, 0.1), so the 0-1 round-trip can move a
+    // stored value by at most half the 0.1 step = 0.05.
+    CHECK (biteTiltParam->convertFrom0to1 (biteTiltParam->getValue()) == Catch::Approx (-100.0f).margin (0.05f));
 }
 
 TEST_CASE ("State migration: legacy tone=8000 Hz (v0.1 fully-open) maps to biteTilt=0% (flat)", "[state][migration]")
@@ -189,7 +194,9 @@ TEST_CASE ("State migration: legacy tone=8000 Hz (v0.1 fully-open) maps to biteT
 
     auto* biteTiltParam = processor.apvts.getParameter (ParamIDs::biteTilt);
     REQUIRE (biteTiltParam != nullptr);
-    CHECK (biteTiltParam->convertFrom0to1 (biteTiltParam->getValue()) == Catch::Approx (0.0f).margin (0.5f));
+    // Exact at this anchor too (tone = 8000 -> -100 * 0 / 7000 = exactly 0);
+    // bounded by the same half-step quantisation of the 0.1-stepped range.
+    CHECK (biteTiltParam->convertFrom0to1 (biteTiltParam->getValue()) == Catch::Approx (0.0f).margin (0.05f));
 }
 
 TEST_CASE ("State migration: legacy tone=4500 Hz (midpoint) maps to an intermediate negative biteTilt",
