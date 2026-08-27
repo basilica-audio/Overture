@@ -123,6 +123,15 @@ Oversampling unchanged (2x/4x/8x, next-prepare semantics, real-time-safety ratio
   citation). Negative values darken (low-pass-shelf character, subsuming v1's entire cut-only
   range so no v1 use case is lost), positive values brighten (shelf boost above the corner) —
   the capability v1 entirely lacked.
+- **The two directions do not share a shelf-gain ceiling** (v0.3.1, issue #44). The cut side
+  needs a very large nominal shelf gain (100 dB) purely so that a 2nd-order shelf is dark
+  enough near the corner to subsume v1's entire 4th-order Tone range; the boost side has no
+  such requirement and is capped at **+12 dB**, the same magnitude as the Bite low-shelf's own
+  maximum cut. Before the cap, the two directions shared the 100 dB constant, so Bite Tilt
+  delivered roughly one dB of broadband boost per percent of knob travel — the *Fuzz-Adjacent
+  Lead* preset's `bite_tilt` of +25% was +25 dB of post-clip gain, and rendered the reference
+  programme at +27.10 dBFS. Gated by `tests/EngineTests.cpp`'s
+  `[bitetilt][headroom]` case.
 - Implementation: two complementary shelf filters (or a single tilt-EQ topology) replacing the
   two cascaded low-pass IIR sections; steepness is intentionally gentler than v1's 4th-order
   low-pass (a tilt control is meant for shaping, not brick-wall fizz removal) — target roughly

@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A factory-preset headroom gate** (`tests/PresetHeadroomTests.cpp`). Every shipped factory
+  preset is rendered through the real `AudioProcessor` at 48 kHz against the suite reference
+  programme (four plucked notes spanning E1 41.203 Hz to A5 880.000 Hz, twelve harmonics each,
+  peak-normalised to −12 dBFS), and its output peak asserted below 0 dBFS. The shipped `Level`
+  values target −0.3 dBFS, so there is 0.3 dB between "a voicing tweak moved the peak" and
+  "this gate goes red". The case also asserts how many factory presets it exercised, so a
+  preset library that stopped loading is distinguishable from every preset passing.
+
+- **A Bite Tilt boost-ceiling gate** (`tests/EngineTests.cpp`, `[bitetilt][headroom]`). Sweeps
+  the boost half of the control across frequency and asserts the realised boost never exceeds
+  +12 dB — tight rather than vacuous, since the same case asserts the ceiling *is* reached well
+  above the corner, and that the upper half of the knob is still monotonic.
+
+### Fixed
+
+- **Bite Tilt's boost direction applied up to +100 dB of post-clip gain.** The control used a
+  single symmetric shelf-gain ceiling for both directions, and that ceiling was the 100 dB the
+  **cut** direction needs so a 2nd-order shelf can subsume v0.1's entire 4th-order Tone range.
+  The **boost** direction never had such a requirement, and inherited it anyway: a positive Bite
+  Tilt delivered very nearly one dB of broadband boost per percent of knob travel, because the
+  material that matters carries energy well above the 3 kHz corner where the shelf is
+  asymptotic.
+
+  Measured on the reference programme: the *Fuzz-Adjacent Lead* factory preset — whose Hard Clip
+  voicing bounds its pre-tilt signal at 0 dBFS **by construction**, so no amount of Drive can
+  explain the result — rendered at **+27.10 dBFS**, of which **+23.27 dB was this shelf alone**
+  at a `Bite Tilt` of just +25 %. *Own Distortion* rendered at +11.48 dBFS, of which +10.65 dB
+  was the shelf at +10 %.
+
+  The boost ceiling is now **+12 dB**, separate from the cut ceiling's unchanged 100 dB — the
+  same magnitude as the Bite low-shelf's own maximum cut, so Overture's two tone shelves have
+  equal authority, and bounded so a positive tilt can consume at most 12 dB of output headroom,
+  inside what `Level`'s ±24 dB can give back. The cut direction, its v0.1 Tone
+  backward-compatibility guarantee and every preset with a zero or negative tilt are
+  bit-identical.
+
+  **This changes how a positive `bite_tilt` sounds**, in saved sessions as well as in presets —
+  deliberately. A knob position that used to mean "+25 dB of treble" now means "+3 dB of
+  treble".
+
+- **Two factory presets pushed the reference programme past 0 dBFS.** With the Bite Tilt
+  ceiling fixed, *Fuzz-Adjacent Lead* still measured +7.46 dBFS and *Own Distortion* +2.38 dBFS
+  — genuine overshoot this time, from Hard Clip sitting on its own ceiling with a positive tilt
+  and (for Fuzz-Adjacent Lead) +3 dB of `Level` on top. Each gets a derived `Level` trim and
+  nothing else, so its voicing is untouched; the trim is that preset's own measured overshoot
+  plus a −0.3 dBFS headroom target, rounded up to the parameter's 0.01 dB step:
+
+  | Preset | Before the tilt fix | After the tilt fix | Trim | Final |
+  |---|---:|---:|---:|---:|
+  | Fuzz-Adjacent Lead | +27.10 dBFS | +7.46 dBFS | −7.77 dB | −0.31 dBFS |
+  | Own Distortion | +11.48 dBFS | +2.38 dBFS | −2.68 dB | −0.30 dBFS |
+
+  The other nine presets already sat between −5.55 and −11.53 dBFS and are **not raised** —
+  that would be level-matching the set, which is a taste question and stays open.
+
 ### Changed
 
 - **Plugin metadata now carries the vendor URL, the copyright string, a real description and

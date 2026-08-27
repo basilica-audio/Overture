@@ -601,7 +601,12 @@ void OvertureEngine::processSubBlock (juce::dsp::AudioBlock<float>& block)
     {
         if (std::abs (biteTiltPercent - lastAppliedBiteTiltPercent) > coefficientEpsilonPercent)
         {
-            const auto tiltDb = (biteTiltPercent * 0.01f) * biteTiltMaxDb;
+            // Asymmetric by design: the cut direction needs a very large
+            // nominal shelf gain for its v0.1 Tone backward-compatibility
+            // guarantee, the boost direction does not and must not have one
+            // (see biteTiltMaxCutDb/biteTiltMaxBoostDb in OvertureEngine.h).
+            const auto tiltCeilingDb = biteTiltPercent < 0.0f ? biteTiltMaxCutDb : biteTiltMaxBoostDb;
+            const auto tiltDb = (biteTiltPercent * 0.01f) * tiltCeilingDb;
             // The explicit minus-infinity floor matters: at biteTilt =
             // -100% the requested shelf gain is exactly -100 dB, which is
             // ALSO juce::Decibels::decibelsToGain's default minus-infinity

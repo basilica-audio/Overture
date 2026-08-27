@@ -216,19 +216,45 @@ private:
     // rounded to 3 kHz per docs/design-brief.md's "Bite" section.
     static constexpr float biteTiltCornerHz = 3000.0f;
 
-    // Maximum tilt (dB) applied at biteTilt = +/-100%. Reasoned, not
-    // sourced - chosen generously (unlike a subtle "mix bus" tilt EQ) so
-    // that the fully-negative setting comfortably subsumes v0.1's entire
-    // cut-only Tone range (a hard backward-compatibility guarantee from
-    // docs/design-brief.md - see tests/EngineTests.cpp's bidirectionality
-    // test, which measures this directly rather than assuming it). A 2nd-
-    // order RBJ shelf (see shelfQ's docs) only asymptotically approaches
-    // this figure well above the corner, so the constant itself has to be
-    // considerably larger than the darkness actually wanted at any single
-    // audible test frequency - 100 dB was tuned empirically against
-    // tests/EngineTests.cpp's "subsumes v0.1's Tone range" comparison at
-    // 4 kHz (2 octaves above v0.1's darkest 1 kHz Tone cutoff).
-    static constexpr float biteTiltMaxDb = 100.0f;
+    // Maximum tilt (dB) applied at biteTilt = -100%, i.e. the CUT
+    // direction. Reasoned, not sourced - chosen generously (unlike a subtle
+    // "mix bus" tilt EQ) so that the fully-negative setting comfortably
+    // subsumes v0.1's entire cut-only Tone range (a hard backward-
+    // compatibility guarantee from docs/design-brief.md - see
+    // tests/EngineTests.cpp's bidirectionality test, which measures this
+    // directly rather than assuming it). A 2nd-order RBJ shelf (see shelfQ's
+    // docs) only asymptotically approaches this figure well above the
+    // corner, so the constant itself has to be considerably larger than the
+    // darkness actually wanted at any single audible test frequency -
+    // 100 dB was tuned empirically against tests/EngineTests.cpp's
+    // "subsumes v0.1's Tone range" comparison at 4 kHz (2 octaves above
+    // v0.1's darkest 1 kHz Tone cutoff).
+    static constexpr float biteTiltMaxCutDb = 100.0f;
+
+    // Maximum tilt (dB) applied at biteTilt = +100%, i.e. the BOOST
+    // direction - and deliberately NOT the same number as the cut above.
+    //
+    // Until v0.3.1 a single symmetric constant served both directions, so
+    // the 100 dB that the cut side needs for its backward-compatibility
+    // guarantee was also what the boost side delivered: Bite Tilt applied
+    // very nearly one dB of broadband boost per percent of knob travel,
+    // because the programme material that matters here carries energy well
+    // above the 3 kHz corner where the shelf IS asymptotic. Measured: the
+    // Fuzz-Adjacent Lead factory preset, whose Hard Clip voicing bounds the
+    // pre-tilt signal at 0 dBFS by construction, rendered the reference
+    // programme at +27.10 dBFS - of which +23.27 dB was this shelf at a
+    // Bite Tilt of +25%. That is not a preset that was voiced too hot; it
+    // is a tone control whose upper half was an unexamined mirror of a
+    // constant tuned for its lower half. Nothing in docs/design-brief.md
+    // ever asked the boost direction for more than "brighter".
+    //
+    // 12 dB is this plugin's own reasoned magnitude for a shelf that is
+    // "moderate and clearly audible" - it is exactly biteShelfMaxCutDb
+    // above, so Overture's two tone shelves now have the same authority as
+    // each other. It also bounds how much output headroom a positive tilt
+    // can consume at 12 dB, which is inside what the Level control's
+    // +/-24 dB range can give back.
+    static constexpr float biteTiltMaxBoostDb = 12.0f;
 
     // Asymmetry: `asymmetryAmount` (0-100%) maps linearly to the
     // Asymmetric voicing's internal bias `a` in 0.0-this value. 40% (the
