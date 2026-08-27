@@ -47,6 +47,10 @@ juce_add_plugin(Overture
     PLUGIN_CODE Ovtr
     FORMATS AU VST3 Standalone
     PRODUCT_NAME "Overture"
+    COMPANY_WEBSITE "https://basilica-audio.github.io/website/"
+    COMPANY_COPYRIGHT "Copyright (c) 2026 Yves Vogl"
+    DESCRIPTION "Tight boost and overdrive for the pre-amp tightening stage"
+    VST3_CATEGORIES Fx Distortion
     COPY_PLUGIN_AFTER_BUILD TRUE
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE

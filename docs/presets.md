@@ -1,6 +1,6 @@
 # Factory presets
 
-Eleven factory presets ship with Overture v0.3.0, embedded via BinaryData from
+Eleven factory presets ship with Overture, embedded via BinaryData from
 `presets/factory/*.json` (M2 preset system, `.scaffold/specs/preset-system-m2.md`
 - `src/presets/PresetManager.{h,cpp}`/`src/presets/PresetBar.{h,cpp}`, copied
 verbatim from the Nave pilot per `docs/design-brief.md`). Eight of the nine
