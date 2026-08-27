@@ -7,14 +7,14 @@
 [![CI](https://github.com/basilica-audio/overture/actions/workflows/ci.yml/badge.svg)](https://github.com/basilica-audio/overture/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-> **Work in progress.** Overture is pre-1.0 and under active development. Binaries for macOS and Windows are available from the [Releases](../../releases) page (currently unsigned — see the release notes); building from source works too. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
+> **Work in progress.** Overture is pre-1.0 and under active development. Binaries for macOS and Windows are available from the [Releases](../../releases) page (macOS builds are signed with a Developer ID certificate, notarized and stapled); building from source works too. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
 
 <!-- ==BEGIN BODY== (plugin engineer: replace this block with What it is / Features / Signal flow / Roadmap) -->
 ## What it is
 
 Overture is a TS-808-style tight overdrive/boost built on JUCE 8, aimed at the pre-amp tightening stage metal guitarists run in front of a high-gain amp: it strips low end before the clipper (the "808 boost" trick) so palm mutes stay tight instead of farting out into the gain stage, then drives an oversampled, selectable-voicing clipper for the actual overdrive character. See [`docs/manual.md`](docs/manual.md) for the full user manual (signal flow, every parameter explained, and usage tips).
 
-## Features (v0.2.0 scope)
+## Features
 
 - **Tight** - high-pass pre-emphasis, 20 Hz - 400 Hz (default 100 Hz), removes low end before the clipper
 - **Drive** - 0 - 40 dB of gain into the clipper (default 3 dB)
@@ -27,7 +27,7 @@ Overture is a TS-808-style tight overdrive/boost built on JUCE 8, aimed at the p
 - **Mix** - dry/wet, with the dry path delay-compensated against the oversampling latency so Mix at 0% is a sample-accurate passthrough
 - **Bypass** - host-visible soft bypass; keeps the oversampler running and latency reporting stable, crossfades instead of clicking
 - **Oversampling** - 2x / 4x / 8x, selectable; takes effect on the next host re-initialisation (real-time-safe by design - see [`docs/manual.md`](docs/manual.md))
-- **Presets** - nine factory presets plus full user preset management (save/load/import/export/default), with a German-localised preset bar frame
+- **Presets** - eleven factory presets plus full user preset management (save/load/import/export/default), with a German-localised preset bar frame
 - Full state save/recall via `AudioProcessorValueTreeState`, with tolerant migration of v0.1 sessions
 
 ## Signal flow
@@ -56,9 +56,16 @@ See [`docs/architecture.md`](docs/architecture.md) for the full engineering brea
 | M4 | Release engineering - signing, notarization, installers, v1.0.0 | Planned |
 <!-- ==END BODY== -->
 
+## Documentation
+
+- [`docs/manual.md`](docs/manual.md) — the user manual: what every control does, and how to use it
+- [`docs/presets.md`](docs/presets.md) — what each factory preset is for
+- [`CHANGELOG.md`](CHANGELOG.md) — what shipped in each release
+- [Overture on basilica-audio.github.io](https://basilica-audio.github.io/website/overture/) — the product page (English and German)
+
 ## Installation
 
-No pre-built binaries are published yet (see the work-in-progress notice above). Once releases begin, installation will follow the standard plugin locations:
+Download the archive for your platform from the [Releases](../../releases) page and copy the bundles into the standard plugin locations:
 
 **macOS**
 
