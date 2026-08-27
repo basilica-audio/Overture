@@ -75,7 +75,7 @@ Nothing else in the plugin adds reported latency. The gate has no lookahead, and
 
 ## Presets
 
-Overture ships with eleven factory presets (a certified **Default** plus ten use-case-driven starting points - see [`docs/presets.md`](presets.md) for the full list and intent behind each). The preset bar docked at the top of the editor lets you browse factory/user presets, save your own (`~/Library/Audio/Presets/Yves Vogl/Overture/` on macOS), import/export single presets or zip banks, and mark any preset (including your own) as the default that loads on a fresh instance.
+Overture ships with eleven factory presets (a certified **Default** plus ten use-case-driven starting points - see [`docs/presets.md`](presets.md) for the full list and intent behind each). The preset bar docked at the top of the editor lets you browse factory/user presets, save your own (`~/Library/Audio/Presets/Basilica Audio/Overture/` on macOS), import/export single presets or zip banks, and mark any preset (including your own) as the default that loads on a fresh instance.
 
 ## What changed in v0.3.0
 
