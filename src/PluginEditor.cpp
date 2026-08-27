@@ -1,115 +1,26 @@
 #include "PluginEditor.h"
 #include "PluginEditorLayout.h"
 #include "PluginProcessor.h"
-#include "gui/ImageDensity.h"
-#include "params/ParameterIds.h"
 #include "presets/Localisation.h"
 
 #include <BinaryData.h>
 
+#include <cmath>
+
 namespace
 {
-    // Base (@1x, 100% scale) faceplate geometry lives in PluginEditorLayout.h
-    // (ovtr::layout) rather than here, so tests/gui/EditorLayoutTests.cpp can
-    // assert layout invariants against the exact constants this file lays
-    // components out with - see that header's docs.
     using namespace ovtr::layout;
-    using Bay = OvertureAudioProcessorEditor::Bay;
-
-    struct KnobLayoutEntry
-    {
-        const char* parameterId;
-        const char* labelText;
-        Bay bay;
-        int column;
-    };
-
-    struct ToggleLayoutEntry
-    {
-        const char* parameterId;
-        const char* labelText;
-        Bay bay;
-        int column;
-    };
-
-    struct ChoiceLayoutEntry
-    {
-        const char* parameterId;
-        const char* labelText;
-        Bay bay;
-        int column;
-    };
-
-    // Signal-flow-grouped, matching faceplate-overture-v1/layout-manifest.json
-    // 1:1: input (Tight HPF -> Drive), clipper (voicing + its three v0.2.0
-    // shape controls), output (post-clip tilt -> level -> mix), utility
-    // (bypass + oversampling). Column order within each bay matches the
-    // manifest's own "controls" array order.
-    constexpr std::array<KnobLayoutEntry, OvertureAudioProcessorEditor::numKnobs> knobLayout {
-        KnobLayoutEntry { ParamIDs::tight, "Tight", Bay::input, 0 },
-        KnobLayoutEntry { ParamIDs::drive, "Drive", Bay::input, 1 },
-        KnobLayoutEntry { ParamIDs::asymmetryAmount, "Asymmetry", Bay::clipper, 1 },
-        KnobLayoutEntry { ParamIDs::kneeSoften, "Knee Soften", Bay::clipper, 2 },
-        KnobLayoutEntry { ParamIDs::biteAmount, "Bite", Bay::clipper, 3 },
-        KnobLayoutEntry { ParamIDs::biteTilt, "Bite Tilt", Bay::output, 0 },
-        KnobLayoutEntry { ParamIDs::level, "Level", Bay::output, 1 },
-        KnobLayoutEntry { ParamIDs::mix, "Mix", Bay::output, 2 },
-    };
-
-    constexpr std::array<ToggleLayoutEntry, OvertureAudioProcessorEditor::numToggles> toggleLayout {
-        ToggleLayoutEntry { ParamIDs::bypass, "Bypass", Bay::utility, 0 },
-    };
-
-    constexpr std::array<ChoiceLayoutEntry, OvertureAudioProcessorEditor::numChoices> choiceLayout {
-        ChoiceLayoutEntry { ParamIDs::voicing, "Voicing", Bay::clipper, 0 },
-        ChoiceLayoutEntry { ParamIDs::oversampling, "Oversampling", Bay::utility, 1 },
-    };
-
-    // Total control count per bay (needed to divide each bay's row into
-    // equal-width cells) - matches faceplate-overture-v1/layout-manifest.json's
-    // "controls" array lengths exactly (2, 4, 3, 2).
-    constexpr int bayColumnCount (Bay bay) noexcept
-    {
-        switch (bay)
-        {
-            case Bay::input: return 2;
-            case Bay::clipper: return 4;
-            case Bay::output: return 3;
-            case Bay::utility: return 2;
-        }
-
-        return 1;
-    }
-
-    const juce::Rectangle<int>& bayRect1x (Bay bay) noexcept
-    {
-        switch (bay)
-        {
-            case Bay::input: return inputBay1x;
-            case Bay::clipper: return clipperBay1x;
-            case Bay::output: return outputBay1x;
-            case Bay::utility: return utilityBay1x;
-        }
-
-        return inputBay1x;
-    }
 
     juce::Image loadImage (const char* data, int size)
     {
         return juce::ImageCache::getFromMemory (data, size);
     }
 
-    // M2 i18n frame (.scaffold/specs/preset-system-m2.md): selects German
-    // (resources/i18n/de.txt) or falls through to English, once, at editor
-    // construction - see Localisation.h's docs. `presetBar` is a member
-    // initialised via the constructor's initialiser list, and its own
-    // constructor already calls TRANS() on every button label - member
-    // initialisers run in declaration order regardless of the order
-    // they're written in, so this helper (called from presetBar's own
-    // initialiser expression below) is what actually guarantees
-    // installLocalisation() runs before presetBar exists, not an
-    // installLocalisation() call in the constructor *body*, which would run
-    // too late.
+    // M2 i18n frame: selects German (resources/i18n/de.txt) or falls
+    // through to English, once, at editor construction - see
+    // Localisation.h's docs. Called from presetBar's own initialiser
+    // expression so installLocalisation() is guaranteed to run before
+    // PresetBar's constructor TRANS()es its button labels.
     basilica::presets::PresetManager& initLocalisationThenGetPresetManager (OvertureAudioProcessor& processor)
     {
         basilica::presets::installLocalisation (BinaryData::de_txt, BinaryData::de_txtSize);
@@ -117,80 +28,69 @@ namespace
     }
 
     // Non-parameter, per-session UI state: the stepped scale choice (0/1/2)
-    // stored as a plain property directly on apvts.state. This ValueTree is
-    // exactly what getStateInformation()/setStateInformation() serialise, so
-    // a property set here round-trips through host session save/reload the
-    // same way the registered parameters do, without needing its own
-    // parameter (a scale step is a view choice, not something that should be
-    // host-automatable or appear in a DAW's parameter list).
+    // stored as a plain property directly on apvts.state.
     constexpr const char* uiScaleStepProperty = "uiScaleStep";
+
+    // Engraved lettering: gilded antique gold with a dark drop shadow one
+    // scaled pixel below - the correct read for light-on-dark lettering on
+    // the near-black basalt plate (the same gilded convention apotheosis'
+    // typography pass established for dark grounds; a dark-ink engraving
+    // would vanish here).
+    const basilica::gui::EngravedTextStyle plateLabelStyle {
+        juce::Colour (0xf0d6ad5e), juce::Colour (0x8c000000), 13.0f, 0.16f, true
+    };
+
+    struct SpriteGeometry
+    {
+        juce::Point<float> anchor;
+        float capRadius; // 0 = not a rotating-cap sprite
+        float minAngleDeg, maxAngleDeg;
+    };
+
+    SpriteGeometry geometryForKind (const juce::String& kind)
+    {
+        if (kind == "selector")
+            return { { selectorAnchorX, selectorAnchorY }, selectorCapRadius,
+                     -selectorSweepDeg * 0.5f, selectorSweepDeg * 0.5f };
+
+        if (kind == "toggle")
+            return { { toggleAnchorX, toggleAnchorY }, 0.0f, 0.0f, 0.0f };
+
+        return { { knobAnchorX, knobAnchorY }, knobCapRadius,
+                 -knobSweepDeg * 0.5f, knobSweepDeg * 0.5f };
+    }
 }
 
 OvertureAudioProcessorEditor::OvertureAudioProcessorEditor (OvertureAudioProcessor& processorToEdit)
     : juce::AudioProcessorEditor (&processorToEdit),
       audioProcessor (processorToEdit),
-      presetBar (initLocalisationThenGetPresetManager (processorToEdit))
+      manifest (basilica::gui::LayoutManifest::parse (BinaryData::layout_manifest_json,
+                                                      BinaryData::layout_manifest_jsonSize)),
+      presetBar (initLocalisationThenGetPresetManager (processorToEdit)),
+      typography (BinaryData::EBGaramondRegular_ttf, BinaryData::EBGaramondRegular_ttfSize,
+                  BinaryData::EBGaramondSemiBold_ttf, BinaryData::EBGaramondSemiBold_ttfSize)
 {
-    setLookAndFeel (&lookAndFeel);
+    // A structurally broken manifest must fail loudly in development and
+    // degrade to a plate-only editor in production, never crash.
+    jassert (manifest.isValid());
 
-    facePlateImage1x = loadImage (BinaryData::faceplate_overture_900x600_png, BinaryData::faceplate_overture_900x600_pngSize);
-    facePlateImage2x = loadImage (BinaryData::faceplate_overture_1800x1200_png, BinaryData::faceplate_overture_1800x1200_pngSize);
-    brandIconImage = loadImage (BinaryData::icon256_png, BinaryData::icon256_pngSize);
+    plateImage = loadImage (BinaryData::plate_overture_png, BinaryData::plate_overture_pngSize);
+    knobSprite = loadImage (BinaryData::sprite_knob_brass_png, BinaryData::sprite_knob_brass_pngSize);
+    selectorSprite = loadImage (BinaryData::sprite_selector_stepped_png, BinaryData::sprite_selector_stepped_pngSize);
+    toggleSprite = loadImage (BinaryData::sprite_toggle_up_png, BinaryData::sprite_toggle_up_pngSize);
 
-    // Creation order below doubles as the accessibility/keyboard focus order
-    // (JUCE's default FocusTraverser walks children in z-order, i.e.
-    // creation order, when no custom traverser is installed) - kept
-    // deliberately matching the visual reading order: header/scale control,
-    // preset bar, then each bay's controls in signal-flow order (input,
-    // clipper, output, utility).
-    titleLabel.setText ("Overture", juce::dontSendNotification);
-    titleLabel.setJustificationType (juce::Justification::centredLeft);
-    titleLabel.setFont (juce::Font (juce::FontOptions {}
-                                        .withName (juce::Font::getDefaultSerifFontName())
-                                        .withHeight (26.0f)
-                                        .withStyle ("Bold")));
-    titleLabel.setInterceptsMouseClicks (false, false);
-    addAndMakeVisible (titleLabel);
-
+    // Creation order doubles as the keyboard focus order (JUCE's default
+    // FocusTraverser walks children in z-order = creation order): preset
+    // bar + scale control first, then every manifest control in the
+    // manifest's own reading order (top band selectors, knob rows in
+    // signal-flow order, the bypass lever last).
     addAndMakeVisible (presetBar);
 
-    // A-05-equivalent (see basilica-audio/silentium's M3 a11y review): the
-    // scale button's accessible title is set from applyScaleStep() below,
-    // which runs once here at construction (with the stored/default step)
-    // and again on every subsequent click, so the accessible name always
-    // reflects the CURRENT scale instead of a static string that never
-    // updates. componentID is set purely so
-    // tests/gui/EditorAccessibilityTests.cpp can find this button without
-    // depending on its (now dynamic) title.
     scaleButton.setComponentID ("scaleButton");
     scaleButton.onClick = [this] { cycleScale(); };
     addAndMakeVisible (scaleButton);
 
-    const auto knobStrip1x = loadImage (BinaryData::knob_brass_strip_160px_128f_png, BinaryData::knob_brass_strip_160px_128f_pngSize);
-    const auto knobStrip2x = loadImage (BinaryData::knob_brass_strip_320px_128f_png, BinaryData::knob_brass_strip_320px_128f_pngSize);
-
-    for (size_t i = 0; i < knobLayout.size(); ++i)
-    {
-        auto& entry = knobLayout[i];
-        knobs[i].slider = std::make_unique<basilica::gui::FilmstripKnob> (knobStrip1x, knobStrip2x, 128);
-        configureKnob (knobs[i], entry.parameterId, entry.labelText);
-    }
-
-    const auto toggleStrip1x = loadImage (BinaryData::toggle_brass_strip_100px_4f_png, BinaryData::toggle_brass_strip_100px_4f_pngSize);
-    const auto toggleStrip2x = loadImage (BinaryData::toggle_brass_strip_200px_4f_png, BinaryData::toggle_brass_strip_200px_4f_pngSize);
-
-    for (size_t i = 0; i < toggleLayout.size(); ++i)
-    {
-        auto& entry = toggleLayout[i];
-        toggles[i].button = std::make_unique<basilica::gui::FilmstripToggle> (entry.labelText, toggleStrip1x, toggleStrip2x);
-        configureToggle (toggles[i], entry.parameterId, entry.labelText);
-    }
-
-    for (size_t i = 0; i < choiceLayout.size(); ++i)
-    {
-        auto& entry = choiceLayout[i];
-        configureChoice (choices[i], entry.parameterId, entry.labelText);
-    }
+    buildControlsFromManifest();
 
     setResizable (false, false);
 
@@ -198,239 +98,231 @@ OvertureAudioProcessorEditor::OvertureAudioProcessorEditor (OvertureAudioProcess
     applyScaleStep (juce::jlimit (0, (int) scaleSteps.size() - 1, storedStep));
 }
 
-OvertureAudioProcessorEditor::~OvertureAudioProcessorEditor()
+OvertureAudioProcessorEditor::~OvertureAudioProcessorEditor() = default;
+
+juce::Image OvertureAudioProcessorEditor::spriteImageFor (const juce::String& spriteKey) const
 {
-    setLookAndFeel (nullptr);
+    if (spriteKey == "selector_stepped")
+        return selectorSprite;
+
+    if (spriteKey == "toggle_up")
+        return toggleSprite;
+
+    return knobSprite;
 }
 
-void OvertureAudioProcessorEditor::configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText)
+void OvertureAudioProcessorEditor::buildControlsFromManifest()
 {
-    knob.slider->setPopupDisplayEnabled (true, true, this);
-    knob.slider->setTitle (labelText);
-    knob.slider->setName (labelText);
-    addAndMakeVisible (*knob.slider);
-
-    if (auto* param = audioProcessor.apvts.getParameter (parameterId))
+    for (const auto& entry : manifest.controls)
     {
-        const auto defaultValue = param->getNormalisableRange().convertFrom0to1 (param->getDefaultValue());
-        knob.slider->setDoubleClickReturnValue (true, defaultValue);
-    }
+        auto* parameter = audioProcessor.apvts.getParameter (entry.id);
+        jassert (parameter != nullptr); // manifest out of sync with ParameterLayout.cpp
+        if (parameter == nullptr)
+            continue;
 
-    knob.label.setText (labelText, juce::dontSendNotification);
-    knob.label.setJustificationType (juce::Justification::centred);
-    knob.label.setInterceptsMouseClicks (false, false);
-    addAndMakeVisible (knob.label);
+        const auto title = parameter->getName (64);
+        const auto geometry = geometryForKind (entry.kind);
 
-    // SliderAttachment MUST be constructed before the textFromValueFunction
-    // override below, not after: JUCE 8.0.14's SliderParameterAttachment
-    // constructor (juce_ParameterAttachments.cpp:128) itself assigns
-    // `slider.textFromValueFunction = [&param] (double v) { return
-    // param.getText (...); }` (no unit) as part of wiring the attachment -
-    // setting our own function BEFORE this point would be silently
-    // clobbered the moment the attachment is created (documented JUCE 8.0.14
-    // ordering bug, see basilica-audio/silentium's M3 pilot).
-    knob.attachment = std::make_unique<SliderAttachment> (audioProcessor.apvts, parameterId, *knob.slider);
-
-    if (auto* param = audioProcessor.apvts.getParameter (parameterId))
-    {
-        // Every parameter declares its unit via .withLabel() in
-        // ParameterLayout.cpp (dB/%/Hz), but SliderAttachment's own
-        // textFromValueFunction (see above) formats the value but drops the
-        // unit entirely. This feeds BOTH the popup value display
-        // (setPopupDisplayEnabled above) and the accessibility value string
-        // (juce_Slider.cpp:1811's
-        // SliderAccessibilityHandler::ValueInterface::getCurrentValueAsString()
-        // calls Slider::getTextFromValue(), which calls this same function),
-        // so one fix here covers both surfaces. Still uses the parameter's
-        // own getText() (not just a raw suffix) so the reported precision/
-        // rounding matches what the host itself would display.
-        knob.slider->textFromValueFunction = [param] (double v)
+        if (entry.kind == "toggle")
         {
-            return param->getText (param->convertTo0to1 ((float) v), 0) + " " + param->getLabel();
+            Toggle toggle;
+            toggle.entry = &entry;
+            toggle.button = std::make_unique<basilica::gui::SpriteToggle> (
+                spriteImageFor (entry.sprite), geometry.anchor, title);
+            addAndMakeVisible (*toggle.button);
+            toggle.attachment = std::make_unique<ButtonAttachment> (audioProcessor.apvts, entry.id, *toggle.button);
+            toggles.push_back (std::move (toggle));
+            continue;
+        }
+
+        Knob knob;
+        knob.entry = &entry;
+        knob.slider = std::make_unique<basilica::gui::MasterCropKnob> (
+            spriteImageFor (entry.sprite), geometry.anchor, geometry.capRadius, 0.94f,
+            geometry.minAngleDeg, geometry.maxAngleDeg);
+
+        knob.slider->setPopupDisplayEnabled (true, true, this);
+        knob.slider->setTitle (title);
+        knob.slider->setName (title);
+        addAndMakeVisible (*knob.slider);
+
+        const auto defaultValue = parameter->getNormalisableRange().convertFrom0to1 (parameter->getDefaultValue());
+        knob.slider->setDoubleClickReturnValue (true, defaultValue);
+
+        // SliderAttachment MUST be constructed before the
+        // textFromValueFunction override below - JUCE 8.0.14's
+        // SliderParameterAttachment constructor itself assigns
+        // slider.textFromValueFunction as part of wiring the attachment,
+        // which would silently clobber an override set beforehand.
+        knob.attachment = std::make_unique<SliderAttachment> (audioProcessor.apvts, entry.id, *knob.slider);
+
+        knob.slider->textFromValueFunction = [parameter] (double v)
+        {
+            auto text = parameter->getText (parameter->convertTo0to1 ((float) v), 0);
+            const auto label = parameter->getLabel();
+            return label.isNotEmpty() ? text + " " + label : text;
         };
         knob.slider->updateText();
+
+        knobs.push_back (std::move (knob));
     }
-}
-
-void OvertureAudioProcessorEditor::configureToggle (Toggle& toggle, const juce::String& parameterId, const juce::String& labelText)
-{
-    toggle.button->setTitle (labelText);
-    toggle.button->setName (labelText);
-    addAndMakeVisible (*toggle.button);
-
-    toggle.label.setText (labelText, juce::dontSendNotification);
-    toggle.label.setJustificationType (juce::Justification::centredLeft);
-    toggle.label.setInterceptsMouseClicks (false, false);
-    addAndMakeVisible (toggle.label);
-
-    toggle.attachment = std::make_unique<ButtonAttachment> (audioProcessor.apvts, parameterId, *toggle.button);
-}
-
-void OvertureAudioProcessorEditor::configureChoice (Choice& choice, const juce::String& parameterId, const juce::String& labelText)
-{
-    // No dedicated filmstrip/combo-box art ships in this asset wave (see
-    // faceplate-overture-v1/README.md's "11 live controls: ... 2 choices" -
-    // the manifest declares the bay slot, not per-control art), so `voicing`
-    // and `oversampling` stay stock juce::ComboBox instances, explicitly
-    // coloured to match the suite's gold-on-gunmetal palette (the SAME
-    // colours BasilicaLookAndFeel's label caption/backing-chip pair uses -
-    // see BasilicaLookAndFeel::getLabelTextColour()/
-    // getLabelBackingChipColour() - so this box reads as part of the same
-    // engraved-gold family rather than a visibly foreign JUCE default).
-    choice.box.setColour (juce::ComboBox::backgroundColourId, basilica::gui::BasilicaLookAndFeel::getLabelBackingChipColour());
-    choice.box.setColour (juce::ComboBox::textColourId, basilica::gui::BasilicaLookAndFeel::getLabelTextColour());
-    choice.box.setColour (juce::ComboBox::outlineColourId, basilica::gui::BasilicaLookAndFeel::getLabelTextColour().withAlpha (0.6f));
-    choice.box.setColour (juce::ComboBox::arrowColourId, basilica::gui::BasilicaLookAndFeel::getLabelTextColour());
-
-    choice.box.setTitle (labelText);
-    choice.box.setName (labelText);
-    addAndMakeVisible (choice.box);
-
-    // ComboBoxAttachment does not populate the box itself (see its JUCE doc
-    // comment); pull the choice strings straight from the live APVTS
-    // parameter (AudioParameterChoice::getAllValueStrings() returns its
-    // `choices` array) rather than duplicating the string list here, so the
-    // GUI can never drift out of sync with ParameterLayout.cpp. Item IDs are
-    // 1-based to match ComboBox's convention; ComboBoxAttachment maps them
-    // back to the parameter's 0-based choice index.
-    if (auto* parameter = audioProcessor.apvts.getParameter (parameterId))
-        choice.box.addItemList (parameter->getAllValueStrings(), 1);
-
-    choice.label.setText (labelText, juce::dontSendNotification);
-    choice.label.setJustificationType (juce::Justification::centred);
-    choice.label.setInterceptsMouseClicks (false, false);
-    addAndMakeVisible (choice.label);
-
-    choice.attachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, parameterId, choice.box);
 }
 
 void OvertureAudioProcessorEditor::cycleScale()
 {
-    applyScaleStep ((scaleStepIndex + 1) % (int) ovtr::layout::scaleSteps.size());
+    applyScaleStep ((scaleStepIndex + 1) % (int) scaleSteps.size());
 }
 
 void OvertureAudioProcessorEditor::applyScaleStep (int newStepIndex)
 {
-    using namespace ovtr::layout;
-
     scaleStepIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, newStepIndex);
     audioProcessor.apvts.state.setProperty (uiScaleStepProperty, scaleStepIndex, nullptr);
 
     const auto percentText = juce::String ((int) (scaleSteps[(size_t) scaleStepIndex] * 100.0f)) + "%";
     scaleButton.setButtonText (percentText);
-
-    // An explicitly-set AccessibilityHandler title always wins over the
-    // button's own text for screen readers (JUCE 8.0.14
-    // juce_ButtonAccessibilityHandler.h:67-75), so a title set once at
-    // construction and never updated would silently strand AT users on a
-    // stale scale forever, with no way to learn the plugin changed. Re-
-    // setting the title here, alongside the visible text, on every step
-    // change (construction included, since this runs from the constructor
-    // too) keeps both surfaces in sync.
     scaleButton.setTitle ("Window scale, " + percentText);
 
     const auto scale = scaleSteps[(size_t) scaleStepIndex];
+
     setSize ((int) std::lround ((float) baseEditorWidth * scale),
              (int) std::lround ((float) baseEditorHeight * scale));
 }
 
+float OvertureAudioProcessorEditor::plateScale() const noexcept
+{
+    return plateToUnit * scaleSteps[(size_t) scaleStepIndex];
+}
+
+juce::Point<float> OvertureAudioProcessorEditor::plateOrigin() const noexcept
+{
+    const auto scale = scaleSteps[(size_t) scaleStepIndex];
+    return { 0.0f, (float) (topStripHeight1x + topStripGap1x) * scale };
+}
+
 void OvertureAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    using namespace ovtr::layout;
-
     g.fillAll (juce::Colours::black);
 
     const auto scale = scaleSteps[(size_t) scaleStepIndex];
-    const auto plateBounds = juce::Rectangle<float> (0.0f, (float) topStripHeight1x * scale + (float) topStripGap1x * scale,
-                                                      (float) plateWidth1x * scale, (float) plateHeight1x * scale);
 
-    const auto& plateImage = basilica::gui::pickImageForWidth (facePlateImage1x, facePlateImage2x,
-                                                               plateWidth1x, (int) plateBounds.getWidth());
+    // Top chrome strip behind the preset bar + scale button.
+    const auto stripHeight = (float) topStripHeight1x * scale;
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff17141a), 0.0f, 0.0f,
+                                             juce::Colour (0xff0b090d), 0.0f, stripHeight, false));
+    g.fillRect (juce::Rectangle<float> (0.0f, 0.0f, (float) getWidth(), stripHeight));
+    g.setColour (juce::Colour (0xff5a4420));
+    g.fillRect (juce::Rectangle<float> (0.0f, stripHeight - 1.0f * scale, (float) getWidth(), 1.0f * scale));
+
+    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+
+    // 1. The empty family plate.
     if (plateImage.isValid())
-        g.drawImage (plateImage, plateBounds);
-
-    if (brandIconImage.isValid())
     {
-        const auto d = (float) roundelRadius1x * 1.7f * scale;
-        const auto cx = (float) roundelCentre1x.x * scale;
-        const auto cy = plateBounds.getY() + (float) roundelCentre1x.y * scale;
-        g.drawImage (brandIconImage, juce::Rectangle<float> (d, d).withCentre ({ cx, cy }));
+        const auto origin = plateOrigin();
+        g.drawImage (plateImage,
+                     juce::Rectangle<float> (origin.x, origin.y,
+                                             (float) plateWidth1x * scale, (float) plateHeight1x * scale),
+                     juce::RectanglePlacement::stretchToFit, false);
+    }
+
+    // 2. Static control sprites (knob/selector bodies - the rotating caps
+    // are MasterCropKnob children drawn after this method returns;
+    // toggles draw their own sprite entirely, see SpriteToggle.h).
+    drawStaticSprites (g);
+
+    // 3. Engraved lettering - after the sprites so each label sits on top
+    // of its control's feathered basalt patch, still under all children.
+    drawPlateLettering (g);
+}
+
+void OvertureAudioProcessorEditor::drawStaticSprites (juce::Graphics& g) const
+{
+    const auto k = plateScale();
+    const auto origin = plateOrigin();
+
+    for (const auto& entry : manifest.controls)
+    {
+        if (entry.kind == "toggle")
+            continue; // SpriteToggle children own their full visual
+
+        const auto sprite = spriteImageFor (entry.sprite);
+        if (! sprite.isValid())
+            continue;
+
+        const auto geometry = geometryForKind (entry.kind);
+        const auto drawScale = entry.scale * k;
+
+        const auto transform = juce::AffineTransform::scale (drawScale)
+                                   .translated (origin.x + (entry.cx - geometry.anchor.x * entry.scale) * k,
+                                                origin.y + (entry.cy - geometry.anchor.y * entry.scale) * k);
+
+        g.drawImageTransformed (sprite, transform);
+    }
+}
+
+void OvertureAudioProcessorEditor::drawPlateLettering (juce::Graphics& g) const
+{
+    const auto k = plateScale();
+    const auto origin = plateOrigin();
+    const auto uiScale = scaleSteps[(size_t) scaleStepIndex];
+
+    for (const auto& entry : manifest.controls)
+    {
+        if (entry.label.isEmpty() || entry.labelCy <= 0.0f)
+            continue;
+
+        const juce::Rectangle<float> box (origin.x + (entry.cx - labelBoxWidthPlatePx * 0.5f) * k,
+                                          origin.y + (entry.labelCy - labelBoxHeightPlatePx * 0.5f) * k,
+                                          labelBoxWidthPlatePx * k,
+                                          labelBoxHeightPlatePx * k);
+
+        typography.drawEngraved (g, entry.label, box, uiScale, plateLabelStyle);
     }
 }
 
 void OvertureAudioProcessorEditor::resized()
 {
-    using namespace ovtr::layout;
-
-    const auto scale = scaleSteps[(size_t) scaleStepIndex];
-    const auto s = [scale] (int v) { return (int) std::lround ((float) v * scale); };
+    const auto uiScale = scaleSteps[(size_t) scaleStepIndex];
+    const auto s = [uiScale] (int v) { return (int) std::lround ((float) v * uiScale); };
 
     auto bounds = getLocalBounds();
     auto topStrip = bounds.removeFromTop (s (topStripHeight1x));
 
-    scaleButton.setBounds (topStrip.removeFromRight (s (scaleButtonWidth1x)));
-    presetBar.setBounds (topStrip);
+    scaleButton.setBounds (topStrip.removeFromRight (s (scaleButtonWidth1x)).reduced (0, s (2)));
+    presetBar.setBounds (topStrip.reduced (0, s (2)));
 
-    // Everything below is expressed in plate-local coordinates (the base
-    // @1x table above), then offset by the top strip + gap and scaled.
-    const auto toPlateRect = [&] (juce::Rectangle<int> plateLocal)
+    const auto k = plateScale();
+    const auto origin = plateOrigin();
+
+    for (const auto& knob : knobs)
     {
-        return juce::Rectangle<int> (s (plateLocal.getX()),
-                                     s (topStripHeight1x + topStripGap1x) + s (plateLocal.getY()),
-                                     s (plateLocal.getWidth()),
-                                     s (plateLocal.getHeight()));
-    };
+        const auto& entry = *knob.entry;
+        const auto geometry = geometryForKind (entry.kind);
 
-    titleLabel.setBounds (toPlateRect (headerBay1x.withWidth (roundelCentre1x.x - headerBay1x.getX() - roundelRadius1x - 8)));
+        // Bounds sized to EXACTLY the crop canvas at the sprite's drawn
+        // scale, so the rotating cap registers pixel-true on the static
+        // sprite underneath (see MasterCropKnob::cropCanvasSizeFor()).
+        const auto side = (float) basilica::gui::MasterCropKnob::cropCanvasSizeFor (geometry.capRadius)
+                           * entry.scale * k;
 
-    // Every bay lays its own controls out as one row of equal-width cells,
-    // label above/control below - see PluginEditorLayout.h's docs for why
-    // this is per-bay rather than one global grid (unlike Silentium's single
-    // 5x2 knob grid, Overture's manifest groups controls into four
-    // independently-sized bays).
-    const auto labelH = s (knobLabelHeight1x);
-    const auto knobDiam = s (knobDiameter1x);
-    const auto toggleSize = s (toggleSize1x);
-    const auto comboBoxH = s (comboBoxHeight1x);
-
-    const auto cellRectFor = [&] (Bay bay, int column)
-    {
-        const auto bay1x = bayRect1x (bay);
-        const auto bayRect = toPlateRect (bay1x);
-        const auto cols = bayColumnCount (bay);
-        const auto cellW = bayRect.getWidth() / cols;
-
-        return juce::Rectangle<int> (bayRect.getX() + column * cellW, bayRect.getY(), cellW, bayRect.getHeight());
-    };
-
-    for (size_t i = 0; i < knobLayout.size(); ++i)
-    {
-        auto& entry = knobLayout[i];
-        const auto cell = cellRectFor (entry.bay, entry.column);
-
-        knobs[i].label.setBounds (cell.getX(), cell.getY(), cell.getWidth(), labelH);
-        knobs[i].slider->setBounds (juce::Rectangle<int> (knobDiam, knobDiam)
-                                        .withCentre ({ cell.getCentreX(), cell.getY() + labelH + (cell.getHeight() - labelH) / 2 }));
+        knob.slider->setBounds (juce::Rectangle<float> (side, side)
+                                    .withCentre ({ origin.x + entry.cx * k, origin.y + entry.cy * k })
+                                    .getSmallestIntegerContainer());
     }
 
-    for (size_t i = 0; i < toggleLayout.size(); ++i)
+    for (const auto& toggle : toggles)
     {
-        auto& entry = toggleLayout[i];
-        const auto cell = cellRectFor (entry.bay, entry.column);
+        const auto& entry = *toggle.entry;
+        const auto geometry = geometryForKind (entry.kind);
+        const auto sprite = spriteImageFor (entry.sprite);
+        if (! sprite.isValid())
+            continue;
 
-        toggles[i].label.setBounds (cell.getX(), cell.getY(), cell.getWidth(), labelH);
-        toggles[i].button->setBounds (juce::Rectangle<int> (toggleSize, toggleSize)
-                                          .withCentre ({ cell.getCentreX(), cell.getY() + labelH + (cell.getHeight() - labelH) / 2 }));
-    }
+        const auto w = (float) sprite.getWidth() * entry.scale * k;
+        const auto h = (float) sprite.getHeight() * entry.scale * k;
+        const auto x = origin.x + (entry.cx - geometry.anchor.x * entry.scale) * k;
+        const auto y = origin.y + (entry.cy - geometry.anchor.y * entry.scale) * k;
 
-    for (size_t i = 0; i < choiceLayout.size(); ++i)
-    {
-        auto& entry = choiceLayout[i];
-        const auto cell = cellRectFor (entry.bay, entry.column);
-        const auto boxWidth = juce::jmax (s (40), cell.getWidth() - s (8));
-
-        choices[i].label.setBounds (cell.getX(), cell.getY(), cell.getWidth(), labelH);
-        choices[i].box.setBounds (juce::Rectangle<int> (boxWidth, comboBoxH)
-                                       .withCentre ({ cell.getCentreX(), cell.getY() + labelH + (cell.getHeight() - labelH) / 2 }));
+        toggle.button->setBounds (juce::Rectangle<float> (x, y, w, h).getSmallestIntegerContainer());
     }
 }

@@ -93,6 +93,29 @@ juce_add_binary_data(OvertureBinaryData SOURCES
     # Brand icon (already the plugin's ICON_BIG; embedded here additionally
     # so the editor can draw it in the faceplate's header roundel).
     docs/assets/icon-256.png
+    # Wave-3 compositional GUI (campaign 2026-08, supersedes the filmstrip
+    # faceplate assets above, which stay embedded per the suite's
+    # "superseded, not deleted" convention):
+    #   - plate_overture.png: the accepted EMPTY family plate render
+    #     (.scaffold/gui-assets/rollout-2026-07/overture/out/plate-01.png,
+    #     wave-2 job 5fc01211 - see out/VERDICT.md).
+    #   - sprite_*.png: extracted control sprites, copied verbatim from
+    #     .scaffold/gui-assets/sprite-library/ (see its provenance.md for
+    #     source render + crop rect per sprite).
+    #   - layout_manifest.json: the compositional layout manifest, the
+    #     single source of truth for control positions (see
+    #     src/gui/LayoutManifest.h).
+    resources/gui/plate_overture.png
+    resources/gui/sprite_knob_brass.png
+    resources/gui/sprite_selector_stepped.png
+    resources/gui/sprite_toggle_up.png
+    resources/gui/layout_manifest.json
+    # Suite typography: EB Garamond (OFL, resources/fonts/OFL-EBGaramond.txt),
+    # the same two faces the merged typography-pass siblings embed - used by
+    # src/gui/PlateTypography for the engraved control lettering drawn live
+    # over the plate (text is never baked into the renders).
+    resources/fonts/EBGaramond-Regular.ttf
+    resources/fonts/EBGaramond-SemiBold.ttf
 )
 
 # ==============================================================================
@@ -171,6 +194,9 @@ target_link_libraries(Tests PRIVATE SharedCode Catch2::Catch2)
 target_compile_definitions(Tests PRIVATE
     $<TARGET_PROPERTY:Overture,COMPILE_DEFINITIONS>
     JUCE_MODAL_LOOPS_PERMITTED=1
+    # Absolute path to docs/, so tests/gui/EditorSnapshotTests.cpp can write
+    # the committed docs/gui-preview.png directly rather than a copy step.
+    OVERTURE_DOCS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/docs"
 )
 
 set_target_properties(Tests PROPERTIES XCODE_GENERATE_SCHEME ON)

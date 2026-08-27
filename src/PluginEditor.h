@@ -2,41 +2,47 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-#include <array>
+#include <memory>
+#include <vector>
 
-#include "gui/BasilicaLookAndFeel.h"
-#include "gui/FilmstripKnob.h"
-#include "gui/FilmstripToggle.h"
+#include "gui/LayoutManifest.h"
+#include "gui/MasterCropKnob.h"
+#include "gui/PlateTypography.h"
+#include "gui/SpriteToggle.h"
 #include "presets/PresetBar.h"
 
 class OvertureAudioProcessor;
 
-// M3 GUI pilot replication: Overture's photoreal skeuomorphic editor, built
-// from the suite-reusable src/gui/ component family (FilmstripKnob,
-// FilmstripToggle, BasilicaLookAndFeel - ported verbatim from
-// basilica-audio/silentium's M3 pilot) plus the pre-rendered faceplate PNG
-// (see .scaffold/gui-assets/faceplate-overture-v1/README.md). Every visible
-// control is wired to a real APVTS parameter - no dead decoration, per the
-// basilica-gui-design skill's binding spec.
+// Wave-3 COMPOSITIONAL photoreal editor (campaign 2026-08, supersedes the
+// filmstrip-generation M3 editor): the accepted EMPTY family plate render
+// (resources/gui/plate_overture.png) is the sole baked background, and
+// every control is composited live from the extracted control-sprite
+// library at the coordinates in resources/gui/layout_manifest.json (the
+// single source of truth - see gui/LayoutManifest.h). Draw order:
 //
-// Overture's 11 live parameters are 8 continuous (FilmstripKnob), 1 boolean
-// (FilmstripToggle, `bypass`), and 2 discrete choices (`voicing`,
-// `oversampling`) - the last pair has no dedicated filmstrip art in this
-// asset wave (faceplate-overture-v1/ ships no combo-box asset family), so
-// they remain stock juce::ComboBox instances, coloured to match the suite's
-// gold-on-gunmetal palette (see PluginEditor.cpp's configureChoice()) rather
-// than invented filmstrip art outside the manifest's scope.
+//   1. plate render (paint())
+//   2. static control sprites - knob/selector bodies at their manifest
+//      positions (paint(), under the children)
+//   3. engraved lettering - PlateTypography, gilded gold on the dark
+//      basalt (paint(), after the sprites so labels sit on top of each
+//      sprite's feathered basalt patch)
+//   4. rotating cap crops - one MasterCropKnob child per knob/selector,
+//      rotating a feathered circular crop of its own sprite's cap (the
+//      suite INNER-DISC technique: rim + housing stay static underneath)
+//   5. lever toggles - SpriteToggle children drawing their own full
+//      sprite (up = ON, mirrored = OFF; see SpriteToggle.h's asset-gap
+//      docs)
 //
-// Layout: a single per-parameter table (see PluginEditor.cpp) positions
-// every control AND its juce::Label caption from the SAME base-resolution
-// (900x600 @1x) coordinates the faceplate's four engraved bays
-// (input/clipper/output/utility) were authored against - see
-// PluginEditorLayout.h.
+// Overture-specific control set (rollout-2026-07/overture/
+// control-inventory.md): 8 continuous knobs in the 5+3 staggered family
+// rows, 2 stepped selectors (voicing/oversampling) in the top band, the
+// single bypass lever, and deliberately ZERO meters (no metering DSP
+// exists in OvertureEngine - rendering dials with nothing behind them
+// would violate the suite's no-dead-decoration rule).
 //
-// Window scaling is STEPPED (100/150/200%, a corner control next to the
-// preset bar), persisted as a plain property on the APVTS state tree - not a
-// free/continuous resize, because the backing art is pre-rendered at fixed
-// density tiers (see src/gui/ImageDensity.h).
+// Window scaling is STEPPED (100/150/200%, UA-style corner control,
+// persisted as a plain property on the APVTS state tree), matching every
+// merged M3 editor in the suite.
 class OvertureAudioProcessorEditor final : public juce::AudioProcessorEditor
 {
 public:
@@ -46,77 +52,56 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
-    // Which engraved faceplate bay a control belongs to - see
-    // PluginEditorLayout.h's inputBay1x/clipperBay1x/outputBay1x/utilityBay1x
-    // and faceplate-overture-v1/layout-manifest.json, the ground truth this
-    // enum's ordering and every layout table entry (PluginEditor.cpp) must
-    // stay faithful to. Public so PluginEditor.cpp's anonymous-namespace
-    // layout tables can name it as OvertureAudioProcessorEditor::Bay.
-    enum class Bay
-    {
-        input,
-        clipper,
-        output,
-        utility
-    };
-
-    // Public (rather than a private implementation detail) so
-    // PluginEditor.cpp's anonymous-namespace layout tables can size their
-    // std::array<..., N> against the SAME counts the editor's own member
-    // arrays use, instead of a second hand-copied literal that could
-    // silently drift out of sync.
-    static constexpr int numKnobs = 8;
-    static constexpr int numToggles = 1;
-    static constexpr int numChoices = 2;
+    // The parsed layout manifest - exposed read-only so tests assert
+    // layout invariants against the exact data this editor composites
+    // from (tests/gui/EditorLayoutTests.cpp).
+    const basilica::gui::LayoutManifest& layoutManifest() const noexcept { return manifest; }
 
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
-    using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
     struct Knob
     {
-        std::unique_ptr<basilica::gui::FilmstripKnob> slider;
-        juce::Label label;
+        const basilica::gui::ManifestControl* entry = nullptr;
+        std::unique_ptr<basilica::gui::MasterCropKnob> slider;
         std::unique_ptr<SliderAttachment> attachment;
     };
 
     struct Toggle
     {
-        std::unique_ptr<basilica::gui::FilmstripToggle> button;
-        juce::Label label;
+        const basilica::gui::ManifestControl* entry = nullptr;
+        std::unique_ptr<basilica::gui::SpriteToggle> button;
         std::unique_ptr<ButtonAttachment> attachment;
     };
 
-    struct Choice
-    {
-        juce::ComboBox box;
-        juce::Label label;
-        std::unique_ptr<ComboBoxAttachment> attachment;
-    };
-
-    void configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText);
-    void configureToggle (Toggle& toggle, const juce::String& parameterId, const juce::String& labelText);
-    void configureChoice (Choice& choice, const juce::String& parameterId, const juce::String& labelText);
+    juce::Image spriteImageFor (const juce::String& spriteKey) const;
+    void buildControlsFromManifest();
     void applyScaleStep (int newStepIndex);
     void cycleScale();
+    void drawStaticSprites (juce::Graphics& g) const;
+    void drawPlateLettering (juce::Graphics& g) const;
+
+    // plate-render px -> screen px for the current scale step, and the
+    // plate's top-left corner in screen px.
+    float plateScale() const noexcept;
+    juce::Point<float> plateOrigin() const noexcept;
 
     OvertureAudioProcessor& audioProcessor;
 
-    basilica::gui::BasilicaLookAndFeel lookAndFeel;
+    basilica::gui::LayoutManifest manifest;
 
-    juce::Image facePlateImage1x, facePlateImage2x;
-    juce::Image brandIconImage;
+    juce::Image plateImage;
+    juce::Image knobSprite, selectorSprite, toggleSprite;
 
     basilica::presets::PresetBar presetBar;
     juce::TextButton scaleButton;
     int scaleStepIndex = 0; // 0 = 100%, 1 = 150%, 2 = 200%
 
-    std::array<Knob, numKnobs> knobs;
-    std::array<Toggle, numToggles> toggles;
-    std::array<Choice, numChoices> choices;
+    std::vector<Knob> knobs;
+    std::vector<Toggle> toggles;
 
-    juce::Label titleLabel;
+    basilica::gui::PlateTypography typography;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OvertureAudioProcessorEditor)
 };

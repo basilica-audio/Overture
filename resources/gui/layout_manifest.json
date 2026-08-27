@@ -1,0 +1,20 @@
+{
+  "comment": "Wave-3 compositional GUI layout for Overture (rollout-2026-07). Coordinates are plate-render pixels on the 1264x848 wave-2 empty family plate (plate_overture.png, job 5fc01211). Anchor semantics per sprite family: knob/selector = brass cap centre, toggle = housing centre (see src/PluginEditorLayout.h). Control set per rollout-2026-07/overture/control-inventory.md: 8 knobs (rows 5+3), 2 stepped selectors, 1 toggle, 0 meters (DSP-justified).",
+  "plate": { "asset": "plate_overture_png", "widthPx": 1264, "heightPx": 848 },
+  "controls": [
+    { "id": "voicing",         "kind": "selector", "sprite": "selector_stepped", "label": "VOICING",   "cx": 540,  "cy": 190, "labelCy": 283 },
+    { "id": "oversampling",    "kind": "selector", "sprite": "selector_stepped", "label": "OVERSAMPLE","cx": 724,  "cy": 190, "labelCy": 283 },
+
+    { "id": "tight",           "kind": "knob", "sprite": "knob_brass", "label": "TIGHT",     "cx": 240,  "cy": 340, "labelCy": 418 },
+    { "id": "drive",           "kind": "knob", "sprite": "knob_brass", "label": "DRIVE",     "cx": 436,  "cy": 340, "labelCy": 418 },
+    { "id": "asymmetryAmount", "kind": "knob", "sprite": "knob_brass", "label": "ASYMMETRY", "cx": 632,  "cy": 340, "labelCy": 418 },
+    { "id": "kneeSoften",      "kind": "knob", "sprite": "knob_brass", "label": "KNEE",      "cx": 828,  "cy": 340, "labelCy": 418 },
+    { "id": "biteAmount",      "kind": "knob", "sprite": "knob_brass", "label": "BITE",      "cx": 1024, "cy": 340, "labelCy": 418 },
+
+    { "id": "biteTilt",        "kind": "knob", "sprite": "knob_brass", "label": "BITE TILT", "cx": 452,  "cy": 575, "labelCy": 653 },
+    { "id": "level",           "kind": "knob", "sprite": "knob_brass", "label": "LEVEL",     "cx": 632,  "cy": 575, "labelCy": 653 },
+    { "id": "mix",             "kind": "knob", "sprite": "knob_brass", "label": "MIX",       "cx": 812,  "cy": 575, "labelCy": 653 },
+
+    { "id": "bypass",          "kind": "toggle", "sprite": "toggle_up", "label": "BYPASS",   "cx": 905,  "cy": 575, "labelCy": 648 }
+  ]
+}
