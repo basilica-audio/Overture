@@ -1,5 +1,7 @@
 #include "OvertureEngine.h"
 
+#include <cmath>
+
 #include "KneeSoftening.h"
 #include "RealtimeCoefficients.h"
 
@@ -23,6 +25,11 @@ OvertureEngine::OvertureEngine() = default;
 
 void OvertureEngine::prepare (const juce::dsp::ProcessSpec& spec)
 {
+    // One second at the prepared rate - see restFlushDwellSamples.
+    restFlushDwellSamples = static_cast<juce::int64> (std::llround (spec.sampleRate > 0.0 ? spec.sampleRate : 48000.0));
+    silentInputStreak = 0;
+    restFlushed = false;
+
     sampleRate = spec.sampleRate;
     preparedMaxBlockSize = static_cast<size_t> (spec.maximumBlockSize);
 
@@ -287,11 +294,73 @@ void OvertureEngine::process (juce::dsp::AudioBlock<float>& block)
     // block, identical to the pre-#13 behaviour.
     const auto chunkLimit = preparedMaxBlockSize > 0 ? preparedMaxBlockSize : numSamples;
 
+    // Exact-zero rest guarantee (fleet audit class 2b, issue #35): with
+    // JUCE_DSP_ENABLE_SNAP_TO_ZERO=0 the juce_dsp filters (Tight HPF, the
+    // oversampler's own IIR stages, the shelves) no longer snap their
+    // state to zero once per block, and a recursion can rest on a
+    // rounding/FTZ fixed point instead of decaying (measured here at
+    // ~7e-37 resting output; the same class Miserere#46 and Firmament#35
+    // fixed). The silence-gated flush below restores what the library pass
+    // provided, at engine scope and off the hot path - the input scan
+    // short-circuits at the first non-zero sample, so it costs nothing
+    // while programme material plays.
+    const auto numChannels = block.getNumChannels();
+    bool inputIsSilent = true;
+
+    for (size_t channel = 0; channel < numChannels && inputIsSilent; ++channel)
+    {
+        const auto* data = block.getChannelPointer (channel);
+
+        for (size_t sample = 0; sample < numSamples; ++sample)
+        {
+            if (data[sample] != 0.0f)
+            {
+                inputIsSilent = false;
+                break;
+            }
+        }
+    }
+
+    if (inputIsSilent)
+        silentInputStreak += static_cast<juce::int64> (numSamples);
+    else
+    {
+        silentInputStreak = 0;
+        restFlushed = false;
+    }
+
     for (size_t offset = 0; offset < numSamples; offset += chunkLimit)
     {
         const auto chunkLength = juce::jmin (chunkLimit, numSamples - offset);
         auto chunk = block.getSubBlock (offset, chunkLength);
         processChunk (chunk);
+    }
+
+    // The dwell guarantees no in-flight audio (the oversampler's and
+    // DryWetMixer's latency is a few dozen samples, orders of magnitude
+    // below one second) can be swallowed: only after a full second of
+    // contiguous silent input AND a residue already below the library's
+    // own snap threshold is the engine considered drained. One-shot per
+    // silent stretch; reset() touches no parameter smoothers, so wake-up
+    // behaviour is unchanged.
+    if (inputIsSilent && ! restFlushed && silentInputStreak >= restFlushDwellSamples)
+    {
+        auto residue = 0.0f;
+
+        for (size_t channel = 0; channel < numChannels; ++channel)
+        {
+            const auto* data = block.getChannelPointer (channel);
+
+            for (size_t sample = 0; sample < numSamples; ++sample)
+                residue = juce::jmax (residue, std::abs (data[sample]));
+        }
+
+        if (residue < restFlushThreshold)
+        {
+            reset();
+            block.clear();
+            restFlushed = true;
+        }
     }
 }
 
@@ -533,7 +602,21 @@ void OvertureEngine::processSubBlock (juce::dsp::AudioBlock<float>& block)
         if (std::abs (biteTiltPercent - lastAppliedBiteTiltPercent) > coefficientEpsilonPercent)
         {
             const auto tiltDb = (biteTiltPercent * 0.01f) * biteTiltMaxDb;
-            const auto tiltGainFactor = juce::Decibels::decibelsToGain (tiltDb);
+            // The explicit minus-infinity floor matters: at biteTilt =
+            // -100% the requested shelf gain is exactly -100 dB, which is
+            // ALSO juce::Decibels::decibelsToGain's default minus-infinity
+            // threshold - without the second argument the gain factor
+            // becomes exactly 0.0, makeHighShelf clamps that to its -300 dB
+            // internal floor (A = 3.16e-8, JUCE 8.0.14
+            // Decibels::gainWithLowerBound), and the resulting degenerate
+            // biquad has a near-DC double pole (|z| ~ 0.99995): it swallows
+            // the entire band by ~40 dB instead of shelving the top, and
+            // its huge internal state random-walks on float rounding noise
+            // at ~-40 dBFS for minutes of digital silence (caught by the
+            // decaying-tail denormal test, issue #35). -200 dB is
+            // unreachable by the +/-100 dB tilt range, so every legal
+            // tiltDb now maps through the same pow() path bit-identically.
+            const auto tiltGainFactor = juce::Decibels::decibelsToGain (tiltDb, -200.0f);
 
             ovtr::applyBiquadCoefficients (*biteTiltShelf.state,
                 juce::dsp::IIR::ArrayCoefficients<float>::makeHighShelf (sampleRate, biteTiltCornerHz, shelfQ, tiltGainFactor));

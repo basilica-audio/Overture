@@ -246,6 +246,19 @@ private:
 
     double sampleRate = 44100.0;
 
+    // Rest-flush machinery (fleet audit class 2b, issue #35) - see
+    // process(). Threshold = the exact value juce_dsp's own per-block
+    // snapToZero() pass used (JUCE_SNAP_TO_ZERO,
+    // juce_FloatVectorOperations.h, JUCE 8.0.14) before the fleet disabled
+    // JUCE_DSP_ENABLE_SNAP_TO_ZERO; dwell = one second of contiguous
+    // silent input at the prepared rate, an order-of-magnitude upper bound
+    // over the oversampler/DryWetMixer latency, so no in-flight audio can
+    // be swallowed.
+    static constexpr float restFlushThreshold = 1.0e-8f;
+    juce::int64 restFlushDwellSamples = 48000;
+    juce::int64 silentInputStreak = 0;
+    bool restFlushed = false;
+
     // The oversampled processing rate (sampleRate * the oversampler's
     // actual factor, e.g. 4x), computed once in prepare() once the
     // oversampler has been (re)constructed - the Bite shelf runs on the
