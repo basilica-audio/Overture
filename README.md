@@ -16,12 +16,14 @@ Overture is a TS-808-style tight overdrive/boost built on JUCE 8, aimed at the p
 
 ## Features
 
+- **Gate** - an optional noise gate at the start of the wet signal path (keyed from the plugin's own input; the dry/Mix path is deliberately left ungated), off by default; opens above **Gate Threshold**, -80 to -20 dB (default -50 dB, closing 4 dB below), and closes via **Gate Release**: Auto (default) - a program-dependent dual-envelope release, fast on staccato mutes and matched to a ringing chord's own decay - or fixed Fast (800 dB/s) / Slow (60 dB/s)
 - **Tight** - high-pass pre-emphasis, 20 Hz - 400 Hz (default 100 Hz), removes low end before the clipper
 - **Drive** - 0 - 40 dB of gain into the clipper (default 3 dB)
 - **Bite** - frequency-dependent gain *inside* the drive-to-clipper path (0-100%, default 65%) - bass is clipped less than treble, reproducing the reference circuit's own tightening mechanism rather than approximating it with a separate filter
-- **Knee Soften** - drive-dependent knee softening (0-100%, default 40%), applies to all three voicings including Hard Clip
+- **Knee Soften** - drive-dependent knee softening (0-100%, default 40%), applies to the Asymmetric, Soft Symmetric and Hard Clip voicings (no effect on Feedback); the intensity source is set by **Knee Response**: Drive (default, driven by the Drive knob's own position) or Signal (driven by an envelope follower on the actual clipper input, so the knee responds to how hard the circuit is being hit rather than to where the knob sits)
 - **Asymmetry** - exposes the Asymmetric voicing's internal bias as a 0-100% control (default 40%, reproducing v0.1's fixed bias)
-- **Voicing** - Asymmetric (biased tanh, the original "808 boost" character), Soft Symmetric (unbiased tanh), or Hard Clip (straight clamp), run inside oversampling to keep aliasing out of the clipped signal
+- **Voicing** - Asymmetric (biased tanh, the original "808 boost" character), Soft Symmetric (unbiased tanh), Hard Clip (straight clamp), or Feedback (a circuit-solved op-amp/diode clipper with its own built-in pre-emphasis and gain stage - Drive, Bite and Knee Soften have no effect in this voicing), run inside oversampling to keep aliasing out of the clipped signal
+- **Clip Quality** - Classic (default, the original clipper path, bit-identical to pre-v0.3.0) or Enhanced, which adds antiderivative anti-aliasing to the Asymmetric/Soft Symmetric/Hard Clip voicings plus a DC blocker on the output; has no effect on the Feedback voicing, which is a circuit solver rather than a transfer curve
 - **Bite Tilt** - post-clip bidirectional shelf around a ~3 kHz corner (-100% to +100%, default 0%/flat), replacing v0.1's cut-only Tone - darkens *or* brightens
 - **Level** - output trim, -24 dB to +24 dB
 - **Mix** - dry/wet, with the dry path delay-compensated against the oversampling latency so Mix at 0% is a sample-accurate passthrough
